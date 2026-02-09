@@ -261,6 +261,98 @@ Items here are aspirational — not all will be implemented.
   - New construction settling: frequent surveys of newly built sections to
     track initial settlement curve
 
+### MQTT Throttle Control (Autonomous Survey Speed)
+- **Purpose**: The geometry car commands its own locomotive to the optimal
+  survey speed via MQTT → JMRI → DCC, ensuring consistent data quality
+  without manual throttle management. The car becomes a self-driving
+  survey vehicle — set the DCC address, hit start, walk away.
+- **Why this matters for data quality**:
+  - Curve radius accuracy depends on speed being known and appropriate.
+    Too slow in broad curves = low SNR, noisy radius estimate. Too fast
+    in tight curves = accel saturation. The car knows what it needs.
+  - Constant speed produces evenly-spaced spatial samples. Human throttle
+    control introduces speed variation that degrades position estimates.
+  - With speed-from-bump-correlation (dual IMU), the car knows its actual
+    speed and can correct toward the target — true closed-loop control.
+  - Eliminates the biggest source of error: the assumed `--speed` value
+    in the analysis script no longer needs to be a guess.
+- **Infrastructure** (already in place):
+  - JMRI running with MQTT connection to Mosquitto broker
+  - JMRI throttle topics: `cab/{address}/throttle` (0-100 integer %),
+    `cab/{address}/direction` ("FORWARD"/"REVERSE"/"STOP")
+  - esp32-config pattern: broker address + prefix in NVRAM, `PubSubClient`
+  - mqtt-logger captures all traffic for debugging
+- **WiFi architecture**: ESP32 supports `WIFI_AP_STA` (simultaneous AP +
+  Station). Phone connects to "GeometryCar" AP for dashboard, while ESP32
+  connects to layout WiFi as a station for MQTT broker access.
+  - Dashboard still works on the captive portal AP
+  - MQTT traffic goes over the STA interface to the layout network
+  - If layout WiFi is unavailable, AP-only mode still works (manual speed)
+  - NVS stores: layout SSID, layout password, MQTT broker host/port,
+    MQTT prefix (default: empty, matching JMRI defaults)
+- **Firmware changes**:
+  - Add `PubSubClient` (same library as esp32-config)
+  - New module: `throttle.h/cpp` — MQTT connection, speed command publishing
+  - NVS settings: DCC address, layout WiFi credentials, broker address,
+    target survey speed (or "auto"), max speed limit
+  - Publish to `cab/{address}/throttle` with integer 0-100
+  - Publish to `cab/{address}/direction` with "FORWARD"
+  - Subscribe to `cab/{address}/throttle` for feedback (confirm commanded
+    speed was accepted)
+- **Speed control logic** (runs at 1Hz, alongside summary computation):
+  - **Manual mode**: User sets target speed in dashboard, car commands that
+    speed step and holds it. The speed input in the Geometry readout group
+    becomes both the display value and the commanded value.
+  - **Auto mode**: Car adjusts speed based on measurement quality:
+    - On straight track: target a minimum vertical accel RMS (need enough
+      vibration for useful data). Default ~12 scale mph.
+    - In curves: target yaw SNR ≥ 25. If SNR is low, increase speed.
+      If accel_y (centripetal) exceeds 1.5g, decrease speed.
+    - Rate limit: ±1 speed step per second (smooth acceleration, no jerking)
+    - Max speed limit: configurable, default 20 scale mph
+    - Stop on loss of MQTT connection (safety)
+  - **With dual IMU**: Use measured speed (bump correlation) as feedback
+    instead of assumed speed. True closed-loop: commanded speed → measured
+    speed → error → correction. PID or simple proportional control.
+- **Dashboard additions**:
+  - Collapsible "Throttle" panel (like file manager):
+    - DCC address input (number, 1-9999)
+    - Layout WiFi SSID + password fields (stored in NVS)
+    - MQTT broker host:port
+    - Mode selector: Off / Manual / Auto
+    - Target speed (manual mode) or speed range (auto mode)
+    - Current commanded speed readout
+    - MQTT connection status indicator
+    - Emergency stop button (large, red, always visible when throttle active)
+  - Speed input in Geometry group becomes read-only when throttle is active
+    (car knows its own speed, no need to guess)
+- **Safety**:
+  - Emergency stop on: MQTT disconnect, WiFi disconnect, any firmware crash
+    (watchdog), dashboard disconnect with no reconnect in 5 seconds
+  - E-stop sends speed 0 + publishes "STOP" direction
+  - Never exceed max speed limit regardless of auto-mode calculation
+  - Dashboard E-stop button sends both MQTT stop and WebSocket stop command
+  - On startup, throttle is always OFF — requires explicit enable
+  - Speed ramp-up from zero on start (don't jump to target immediately)
+- **Survey workflow with throttle control**:
+  1. Place loco + geometry car on track
+  2. Open dashboard, set DCC address, enable throttle (manual or auto)
+  3. Hit "Start Recording"
+  4. Car accelerates to survey speed, begins logging
+  5. In auto mode: car adjusts speed through curves for optimal measurement
+  6. User hits "Stop Recording" — car decelerates to stop
+  7. Download survey file — speed data is embedded (no `--speed` guess needed)
+- **Survey file enhancement**: When throttle is active, log commanded speed
+  in each summary (1Hz). Analysis script can use actual commanded speed per
+  section instead of a single `--speed` value for the entire run. If dual
+  IMU is present, log measured speed too — comparison of commanded vs measured
+  reveals locomotive speed table accuracy.
+- **Integration with test-and-calibration-track**: The calibration track
+  produces accurate speed tables for each locomotive. The geometry car can
+  load a loco's speed table from NVS or MQTT and convert DCC speed steps
+  to actual model speed for precise position calculation — even without
+  the dual IMU bump-correlation method.
+
 ### Dashboard Enhancements
 - Computed channels (twist, curvature) when dual IMU is present
 - Camera PiP window when ESP32-CAM is detected on network
