@@ -80,8 +80,9 @@ Modules are independent with clean interfaces (no cross-includes between peers):
 | Module | Files | Hardware? | Testable natively? |
 |--------|-------|-----------|--------------------|
 | config | config.h | No | N/A (definitions only) |
-| ring_buffer | ring_buffer.h/cpp | No | Yes |
-| summary | summary.h/cpp | No* | Yes* |
+| ring_buffer | ring_buffer.h/cpp | No | Yes (11 tests) |
+| summary | summary.h/cpp | No* | Yes* (16 tests) |
+| geometry | geometry.h/cpp | No | Yes (37 tests) |
 | imu | imu.h/cpp | Yes (I2C) | No |
 | display | display.h/cpp | Yes (I2C) | No |
 | wifi_manager | wifi_manager.h/cpp | Yes (WiFi) | No |
@@ -90,6 +91,10 @@ Modules are independent with clean interfaces (no cross-includes between peers):
 
 *summary.cpp calls `imuAccelG()`/`imuGyroDPS()` and `ringBufferGetRecent()` —
 these are mockable for native tests.
+
+geometry.cpp contains pure math extracted from display.cpp: curve radius computation,
+track state classification, ride quality grading, SNR assessment, speed conversion,
+and sparkline auto-scaling. All functions are hardware-independent.
 
 ## Key Design Decisions
 

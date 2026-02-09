@@ -216,6 +216,110 @@ void test_summary_uses_recent_100_only() {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5f, sum.accel_z_peak);
 }
 
+// ===== Edge case tests =====
+
+void test_summary_exactly_10_samples() {
+    // Minimum threshold — should succeed with exactly 10
+    fillConstant(0, 0, 16384, 0, 0, 0, 0, 10);
+
+    summary_1s_t sum;
+    _mock_millis = 500;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 10, 100.0f));
+
+    // Should still compute valid RMS for constant 1g on Z
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, sum.accel_z_rms);
+}
+
+void test_summary_9_samples_fails() {
+    // One below minimum — should fail
+    fillConstant(0, 0, 16384, 0, 0, 0, 0, 9);
+
+    summary_1s_t sum;
+    _mock_millis = 500;
+    TEST_ASSERT_FALSE(summaryCompute(&sum, 9, 100.0f));
+}
+
+void test_summary_exactly_100_samples() {
+    // Full 1-second window at 100Hz
+    fillConstant(0, 0, 16384, 131, 0, 0, 0, 100);
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, sum.accel_z_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.0f, sum.gyro_x_rms);
+}
+
+void test_summary_all_zero_samples() {
+    // All zeros — RMS should be 0, peak should be 0
+    fillConstant(0, 0, 0, 0, 0, 0, 0, 50);
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 50, 100.0f));
+
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_x_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_y_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_z_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_x_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_y_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_z_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.gyro_x_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.gyro_x_mean);
+}
+
+void test_summary_oscillating_gyro_zero_mean() {
+    // Alternating +1 dps and -1 dps on Z gyro — mean should cancel to ~0
+    ringBufferInit();
+    for (int i = 0; i < 100; i++) {
+        imu_sample_t s = {};
+        s.timestamp_ms = i * 10;
+        s.gyro_z = (i % 2 == 0) ? 131 : -131;  // ±1 dps
+        ringBufferPush(&s);
+    }
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    // Mean should be ~0 (positive and negative cancel)
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 0.0f, sum.gyro_z_mean);
+    // RMS should be ~1.0 (RMS of alternating ±1 = 1)
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.0f, sum.gyro_z_rms);
+}
+
+void test_summary_mixed_polarity_accel_peak() {
+    // Mix of positive and negative accel — peak should find max absolute
+    ringBufferInit();
+    for (int i = 0; i < 100; i++) {
+        imu_sample_t s = {};
+        s.timestamp_ms = i * 10;
+        if (i == 50) {
+            s.accel_x = 4096;   // +0.25g
+        } else if (i == 75) {
+            s.accel_x = -8192;  // -0.5g (larger absolute value)
+        }
+        ringBufferPush(&s);
+    }
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    // Peak should be 0.5g (the larger absolute value)
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5f, sum.accel_x_peak);
+}
+
+void test_summary_timestamp_from_millis() {
+    fillConstant(0, 0, 16384, 0, 0, 0, 0, 50);
+
+    summary_1s_t sum;
+    _mock_millis = 42000;
+    summaryCompute(&sum, 50, 100.0f);
+
+    TEST_ASSERT_EQUAL_UINT32(42000, sum.timestamp_ms);
+}
+
 // ===== Runner =====
 
 int main(int argc, char **argv) {
@@ -229,5 +333,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_summary_sample_count_and_rate);
     RUN_TEST(test_summary_temperature);
     RUN_TEST(test_summary_uses_recent_100_only);
+    // New edge-case tests
+    RUN_TEST(test_summary_exactly_10_samples);
+    RUN_TEST(test_summary_9_samples_fails);
+    RUN_TEST(test_summary_exactly_100_samples);
+    RUN_TEST(test_summary_all_zero_samples);
+    RUN_TEST(test_summary_oscillating_gyro_zero_mean);
+    RUN_TEST(test_summary_mixed_polarity_accel_peak);
+    RUN_TEST(test_summary_timestamp_from_millis);
     return UNITY_END();
 }

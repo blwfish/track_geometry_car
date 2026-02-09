@@ -1,4 +1,5 @@
 #include "display.h"
+#include "geometry.h"
 #include "imu.h"
 #include "ring_buffer.h"
 #include <U8g2lib.h>
@@ -18,16 +19,10 @@ static const uint8_t SPARKLINE_Y      = 50;   // Top of sparkline area
 static const uint8_t SPARKLINE_HEIGHT = 14;   // Pixels tall
 static const uint8_t SPARKLINE_WIDTH  = 128;  // Full display width
 
-// Geometry detection thresholds
-static const float CURVE_THRESHOLD_DPS = 0.3f;    // Below this = straight
-static const float GYRO_NOISE_FLOOR_DPS = 0.05f;  // MPU-6050 noise floor (~20Hz DLPF)
-static const float GOOD_SNR = 20.0f;              // SNR threshold for good measurement
-static const float MIN_SNR = 10.0f;               // SNR threshold for marginal measurement
-
-// Assumed survey speed for radius estimation (mm/s).
-// 10 scale mph in HO (1:87) = 58 mm/s model speed.
-// This is a default — the browser dashboard lets the user set actual speed.
-static const float DEFAULT_SPEED_MMS = 58.0f;
+// Default survey speed for OLED radius display (mm/s).
+// 10 scale mph in HO (1:87) ≈ 51.4 mm/s model speed.
+// Browser dashboard lets the user override this.
+static const float DEFAULT_SPEED_MMS = geometryScaleToModelSpeed(10.0f);
 
 bool displayInit() {
     bool ok = u8g2.begin();
@@ -106,43 +101,24 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     // Line 3: Geometry info (curve/straight + speed recommendation)
     // Uses 1-second mean yaw rate from summary for stability
     if (summary != nullptr) {
-        float yawMean = fabsf(summary->gyro_z_mean);  // °/s
-        float snr = yawMean / GYRO_NOISE_FLOOR_DPS;
+        track_state_t state = geometryClassifyTrack(summary->gyro_z_mean);
 
-        if (yawMean < CURVE_THRESHOLD_DPS) {
-            // Straight track — show vibration grade from vertical accel
-            // Subtract 1g gravity, show RMS of the deviation
-            float vertRms = summary->accel_z_rms;
-            // accel_z_rms includes gravity (~1g), deviation is small
-            // A rough ride quality indicator
-            if (vertRms < 1.01f) {
-                snprintf(line, sizeof(line), "Straight  Smooth");
-            } else if (vertRms < 1.03f) {
-                snprintf(line, sizeof(line), "Straight  Fair");
-            } else {
-                snprintf(line, sizeof(line), "Straight  Rough");
-            }
+        if (state == TRACK_STRAIGHT) {
+            ride_quality_t ride = geometryClassifyRide(summary->accel_z_rms);
+            const char *grade = (ride == RIDE_SMOOTH) ? "Smooth" :
+                                (ride == RIDE_FAIR)   ? "Fair"   : "Rough";
+            snprintf(line, sizeof(line), "Straight  %s", grade);
         } else {
-            // In a curve — compute radius
-            float yawRad = yawMean * (M_PI / 180.0f);  // Convert to rad/s
-            float radiusMm = DEFAULT_SPEED_MMS / yawRad;
-            float radiusIn = radiusMm / 25.4f;
+            float absYaw = fabsf(summary->gyro_z_mean);
+            float radiusMm = geometryRadiusMm(absYaw, DEFAULT_SPEED_MMS);
+            float radiusIn = geometryMmToInches(radiusMm);
+            float snr = geometrySNR(absYaw);
+            snr_quality_t sq = geometryClassifySNR(snr);
 
-            // Speed recommendation based on SNR
-            const char *spdHint;
-            if (snr >= GOOD_SNR) {
-                spdHint = "OK";
-            } else if (snr >= MIN_SNR) {
-                spdHint = "ok";
-            } else {
-                spdHint = "\x18SPD";  // ↑SPD — up arrow + SPD
-            }
-
-            if (radiusIn < 100) {
-                snprintf(line, sizeof(line), "R:%.0f\" %s", radiusIn, spdHint);
-            } else {
-                snprintf(line, sizeof(line), "R:%.0f\" %s", radiusIn, spdHint);
-            }
+            const char *spdHint = (sq == SNR_GOOD)     ? "OK" :
+                                  (sq == SNR_MARGINAL)  ? "ok" :
+                                                          "\x18SPD";
+            snprintf(line, sizeof(line), "R:%.0f\" %s", radiusIn, spdHint);
         }
     } else {
         // No summary yet — show raw gyro
@@ -166,37 +142,23 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     uint32_t sparkCount = (available < SPARKLINE_WIDTH) ? available : SPARKLINE_WIDTH;
 
     if (sparkCount > 1) {
-        // Find min/max for auto-scaling
-        float zMin = 1e9f, zMax = -1e9f;
+        // Collect Z-accel values for auto-scaling
+        float zValues[SPARKLINE_WIDTH];
         for (uint32_t i = 0; i < sparkCount; i++) {
             const imu_sample_t *s = ringBufferGetRecent(sparkCount - 1 - i);
-            if (s) {
-                float z = imuAccelG(s->accel_z);
-                if (z < zMin) zMin = z;
-                if (z > zMax) zMax = z;
-            }
+            zValues[i] = s ? imuAccelG(s->accel_z) : 0.0f;
         }
 
-        // Ensure minimum range to avoid division by zero
-        float range = zMax - zMin;
-        if (range < 0.01f) {
-            float mid = (zMin + zMax) / 2.0f;
-            zMin = mid - 0.005f;
-            zMax = mid + 0.005f;
-            range = 0.01f;
-        }
+        // Auto-scale with minimum range guard
+        float zMin, zMax, range;
+        geometrySparklineScale(zValues, sparkCount, 0.01f, &zMin, &zMax, &range);
 
         // Draw sparkline pixels
         uint8_t xOffset = SPARKLINE_WIDTH - sparkCount;
         for (uint32_t i = 0; i < sparkCount; i++) {
-            const imu_sample_t *s = ringBufferGetRecent(sparkCount - 1 - i);
-            if (s) {
-                float z = imuAccelG(s->accel_z);
-                float normalized = (z - zMin) / range;  // 0.0 to 1.0
-                uint8_t y = SPARKLINE_Y + SPARKLINE_HEIGHT - 1
-                            - (uint8_t)(normalized * (SPARKLINE_HEIGHT - 1));
-                u8g2.drawPixel(xOffset + i, y);
-            }
+            uint8_t y = geometrySparklinePixel(zValues[i], zMin, range,
+                                                SPARKLINE_Y, SPARKLINE_HEIGHT);
+            u8g2.drawPixel(xOffset + i, y);
         }
     }
 
