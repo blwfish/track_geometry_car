@@ -245,6 +245,24 @@ button:disabled { opacity: 0.4; cursor: default; }
         <div class="readout-row"><span class="readout-label">Rate</span><span class="readout-val" id="rate-val">-</span></div>
         <div class="readout-row"><span class="readout-label">Samples</span><span class="readout-val" id="count-val">-</span></div>
     </div>
+    <div class="readout-group imu2-group" style="display:none">
+        <h3>Accel2 RMS (g)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="ax2-rms">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="ay2-rms">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="az2-rms">-</span></div>
+    </div>
+    <div class="readout-group imu2-group" style="display:none">
+        <h3>Accel2 Peak (g)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="ax2-pk">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="ay2-pk">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="az2-pk">-</span></div>
+    </div>
+    <div class="readout-group imu2-group" style="display:none">
+        <h3>Gyro2 (°/s)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="gx2-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="gy2-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="gz2-val">-</span></div>
+    </div>
     <div class="readout-group" id="geom-group">
         <h3>Geometry</h3>
         <div class="readout-row"><span class="readout-label">State</span><span class="readout-val" id="geom-state">-</span></div>
@@ -299,7 +317,15 @@ const TRACES = [
     { key: 'gx', label: 'gX', color: '#ffaa44', group: 'gyro', on: true },
     { key: 'gy', label: 'gY', color: '#aa44ff', group: 'gyro', on: true },
     { key: 'gz', label: 'gZ', color: '#44ffff', group: 'gyro', on: true },
+    // IMU #2 traces — dashed style, dimmer colors, hidden by default
+    { key: 'ax2', label: 'aX2', color: '#cc2222', group: 'accel', on: false, imu2: true },
+    { key: 'ay2', label: 'aY2', color: '#22cc22', group: 'accel', on: false, imu2: true },
+    { key: 'az2', label: 'aZ2', color: '#2266cc', group: 'accel', on: false, imu2: true },
+    { key: 'gx2', label: 'gX2', color: '#cc8822', group: 'gyro', on: false, imu2: true },
+    { key: 'gy2', label: 'gY2', color: '#8822cc', group: 'gyro', on: false, imu2: true },
+    { key: 'gz2', label: 'gZ2', color: '#22cccc', group: 'gyro', on: false, imu2: true },
 ];
+let dualImuDetected = false;  // set true when non-zero IMU2 data arrives
 
 // ===== Data store (circular typed arrays) =====
 const data = {};
@@ -311,6 +337,13 @@ let recording = false;
 let recSamples = [];
 let recStart = 0;
 let recTimer = null;
+
+// Show IMU2 UI elements when dual IMU is detected
+function showImu2UI() {
+    document.querySelectorAll('.imu2-group').forEach(el => el.style.display = '');
+    // Enable IMU2 trace toggle buttons
+    document.querySelectorAll('.trace-toggle.imu2').forEach(el => el.style.display = '');
+}
 
 // ===== WebSocket =====
 let ws = null;
@@ -345,10 +378,10 @@ function parseFrame(buf) {
     const type = v.getUint8(0);
 
     if (type === 0x01) {
-        // Raw sample batch
+        // Raw sample batch — 30 bytes per sample (dual IMU format)
         const count = v.getUint8(1);
         for (let i = 0; i < count; i++) {
-            const o = 2 + i * 18;
+            const o = 2 + i * 30;
             const s = {
                 ts: v.getUint32(o, true),
                 ax: v.getInt16(o + 4, true) / ACCEL_SCALE,
@@ -357,8 +390,20 @@ function parseFrame(buf) {
                 gx: v.getInt16(o + 10, true) / GYRO_SCALE,
                 gy: v.getInt16(o + 12, true) / GYRO_SCALE,
                 gz: v.getInt16(o + 14, true) / GYRO_SCALE,
-                temp: v.getInt16(o + 16, true) / TEMP_SCALE + TEMP_OFFSET
+                temp: v.getInt16(o + 16, true) / TEMP_SCALE + TEMP_OFFSET,
+                // IMU #2 (zero when single-IMU)
+                ax2: v.getInt16(o + 18, true) / ACCEL_SCALE,
+                ay2: v.getInt16(o + 20, true) / ACCEL_SCALE,
+                az2: v.getInt16(o + 22, true) / ACCEL_SCALE,
+                gx2: v.getInt16(o + 24, true) / GYRO_SCALE,
+                gy2: v.getInt16(o + 26, true) / GYRO_SCALE,
+                gz2: v.getInt16(o + 28, true) / GYRO_SCALE,
             };
+            // Detect dual IMU: if any IMU2 field is non-zero
+            if (!dualImuDetected && (s.ax2 || s.ay2 || s.az2 || s.gx2 || s.gy2 || s.gz2)) {
+                dualImuDetected = true;
+                showImu2UI();
+            }
             addSample(s);
             if (recording) recSamples.push(s);
         }
@@ -380,6 +425,7 @@ function addSample(s) {
 
 function parseSummary(v) {
     // summary_1s_t layout: timestamp(4) + 13 floats(52) + sample_count(4) + sample_rate(4)
+    // + 12 IMU2 floats(48)
     // Byte 0 is frame type (0x02), data starts at byte 1
     let o = 1;
     const f = () => { const val = v.getFloat32(o, true); o += 4; return val; };
@@ -394,6 +440,12 @@ function parseSummary(v) {
     const count = u();
     const rate = f();
 
+    // IMU #2 summary fields
+    const ax2Rms = f(), ay2Rms = f(), az2Rms = f();
+    const ax2Pk = f(), ay2Pk = f(), az2Pk = f();
+    const gx2Rms = f(), gy2Rms = f(), gz2Rms = f();
+    const gx2Mean = f(), gy2Mean = f(), gz2Mean = f();
+
     document.getElementById('ax-rms').textContent = axRms.toFixed(4);
     document.getElementById('ay-rms').textContent = ayRms.toFixed(4);
     document.getElementById('az-rms').textContent = azRms.toFixed(4);
@@ -406,6 +458,19 @@ function parseSummary(v) {
     document.getElementById('temp-val').textContent = temp.toFixed(1) + '°C';
     document.getElementById('count-val').textContent = count.toLocaleString();
     document.getElementById('rate-val').textContent = rate.toFixed(1) + ' Hz';
+
+    // IMU #2 readouts (only visible when dual IMU detected)
+    if (dualImuDetected) {
+        document.getElementById('ax2-rms').textContent = ax2Rms.toFixed(4);
+        document.getElementById('ay2-rms').textContent = ay2Rms.toFixed(4);
+        document.getElementById('az2-rms').textContent = az2Rms.toFixed(4);
+        document.getElementById('ax2-pk').textContent = ax2Pk.toFixed(4);
+        document.getElementById('ay2-pk').textContent = ay2Pk.toFixed(4);
+        document.getElementById('az2-pk').textContent = az2Pk.toFixed(4);
+        document.getElementById('gx2-val').textContent = gx2Rms.toFixed(2);
+        document.getElementById('gy2-val').textContent = gy2Rms.toFixed(2);
+        document.getElementById('gz2-val').textContent = gz2Rms.toFixed(2);
+    }
 
     // Geometry computation from 1-second mean yaw rate
     updateGeometry(gzMean, azRms);
@@ -607,6 +672,9 @@ function drawChart() {
     for (const t of allActive) {
         const range = t.group === 'accel' ? accelRange : gyroRange;
         ctx.strokeStyle = t.color;
+        // IMU2 traces use dashed lines to distinguish from IMU1
+        if (t.imu2) ctx.setLineDash([4, 3]);
+        else ctx.setLineDash([]);
         ctx.beginPath();
         let started = false;
         for (let i = 0; i < nPoints; i++) {
@@ -619,6 +687,7 @@ function drawChart() {
         }
         ctx.stroke();
     }
+    ctx.setLineDash([]);  // reset
 
     requestAnimationFrame(drawChart);
 }
@@ -628,11 +697,12 @@ requestAnimationFrame(drawChart);
 const tcDiv = document.getElementById('trace-controls');
 TRACES.forEach((t, i) => {
     const el = document.createElement('div');
-    el.className = 'trace-toggle' + (t.on ? '' : ' off');
+    el.className = 'trace-toggle' + (t.on ? '' : ' off') + (t.imu2 ? ' imu2' : '');
+    if (t.imu2) el.style.display = 'none';  // hidden until dual IMU detected
     el.innerHTML = `<span class="trace-swatch" style="background:${t.color}"></span>${t.label}`;
     el.onclick = () => {
         t.on = !t.on;
-        el.className = 'trace-toggle' + (t.on ? '' : ' off');
+        el.className = 'trace-toggle' + (t.on ? '' : ' off') + (t.imu2 ? ' imu2' : '');
     };
     tcDiv.appendChild(el);
 });
@@ -683,7 +753,8 @@ function saveRec() {
     // Captive portal webviews don't support Blob URLs, so we use a data URI
     // with octet-stream MIME type which triggers a download/share prompt.
     const survey = {
-        version: 1,
+        version: dualImuDetected ? 2 : 1,
+        imu_count: dualImuDetected ? 2 : 1,
         car: 'GeometryCar',
         start_time: new Date(recStart).toISOString(),
         duration_sec: (Date.now() - recStart) / 1000,

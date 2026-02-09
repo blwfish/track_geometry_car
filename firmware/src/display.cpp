@@ -89,6 +89,11 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     }
     u8g2.drawStr(0, 7, line);
 
+    // Show "2×" indicator at right edge when dual IMU is active
+    if (imuHasSecond()) {
+        u8g2.drawStr(128 - 10, 7, "2x");  // 2 chars × 5px = 10px
+    }
+
     // === BLUE ZONE (rows 16-63): Data ===
 
     // Line 2: Accelerometer (g)

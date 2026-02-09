@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // ===== VERSION INFORMATION =====
-#define FIRMWARE_VERSION_BASE "0.3.0"
+#define FIRMWARE_VERSION_BASE "0.4.0"
 
 #ifndef BUILD_GIT_HASH
 #define BUILD_GIT_HASH "dev"
@@ -22,9 +22,10 @@
 #define I2C_CLOCK_HZ        400000   // 400 kHz Fast Mode
 
 // ===== I2C DEVICE ADDRESSES =====
-#define MPU6050_ADDR        0x68
+#define MPU6050_ADDR        0x68     // IMU #1 (AD0=LOW, required)
+#define MPU6050_ADDR_2      0x69     // IMU #2 (AD0=HIGH, optional)
 #define OLED_ADDR           0x3C
-// #define INA219_ADDR      0x40     // Phase 2: track power monitor
+// #define INA219_ADDR      0x40     // Phase 3: track power monitor
 
 // ===== MPU-6050 REGISTERS =====
 #define MPU6050_REG_SMPLRT_DIV      0x19
@@ -72,8 +73,10 @@
 #define WS_CMD_STOP_RECORDING   0x11
 #define WS_CMD_CALIBRATE        0x12
 
-// Wire format: 18 bytes per sample (no struct padding)
-#define WS_SAMPLE_WIRE_SIZE     18
+// Wire format: 30 bytes per sample (no struct padding)
+// IMU1: timestamp(4) + accel(6) + gyro(6) + temp(2) = 18
+// IMU2: accel(6) + gyro(6) = 12  (no timestamp, no temp)
+#define WS_SAMPLE_WIRE_SIZE     30
 
 // ===== TIMING CONSTANTS =====
 #define IMU_SAMPLE_INTERVAL_US      10000   // 10 ms = 100 Hz
@@ -89,6 +92,7 @@
 
 struct imu_sample_t {
     uint32_t timestamp_ms;
+    // IMU #1 (front truck, 0x68)
     int16_t accel_x;
     int16_t accel_y;
     int16_t accel_z;
@@ -96,10 +100,18 @@ struct imu_sample_t {
     int16_t gyro_y;
     int16_t gyro_z;
     int16_t temperature;
+    // IMU #2 (rear truck, 0x69) — zero-filled when single IMU
+    int16_t accel_x2;
+    int16_t accel_y2;
+    int16_t accel_z2;
+    int16_t gyro_x2;
+    int16_t gyro_y2;
+    int16_t gyro_z2;
 };
 
 struct summary_1s_t {
     uint32_t timestamp_ms;
+    // IMU #1
     float accel_x_rms;
     float accel_y_rms;
     float accel_z_rms;
@@ -115,24 +127,39 @@ struct summary_1s_t {
     float temperature;
     uint32_t sample_count;
     float sample_rate;
+    // IMU #2 — zero when single IMU
+    float accel_x2_rms;
+    float accel_y2_rms;
+    float accel_z2_rms;
+    float accel_x2_peak;
+    float accel_y2_peak;
+    float accel_z2_peak;
+    float gyro_x2_rms;
+    float gyro_y2_rms;
+    float gyro_z2_rms;
+    float gyro_x2_mean;
+    float gyro_y2_mean;
+    float gyro_z2_mean;
 };
 
 // ===== FLASH LOGGING =====
 #define SURVEY_DIR              "/surveys"
 #define SURVEY_HEADER_SIZE      64
-#define SURVEY_SAMPLE_SIZE      18      // Same as WS_SAMPLE_WIRE_SIZE (no padding)
+#define SURVEY_SAMPLE_SIZE      30      // Same as WS_SAMPLE_WIRE_SIZE (no padding)
 #define SURVEY_MAGIC            "GEOM"
-#define SURVEY_VERSION          1       // 1=IMU only, 2=IMU+INA219 (future)
+#define SURVEY_VERSION_SINGLE   1       // Version 1: single IMU (18 bytes/sample)
+#define SURVEY_VERSION_DUAL     2       // Version 2: dual IMU (30 bytes/sample)
 #define FLASH_MIN_FREE_BYTES    32768   // Reserve 32KB for web UI + overhead
 
 struct __attribute__((packed)) survey_header_t {
     char     magic[4];           // "GEOM"
-    uint8_t  version;            // SURVEY_VERSION
-    uint8_t  sample_size;        // SURVEY_SAMPLE_SIZE (18)
+    uint8_t  version;            // SURVEY_VERSION_SINGLE or _DUAL
+    uint8_t  sample_size;        // SURVEY_SAMPLE_SIZE (30)
     uint16_t sample_rate_hz;     // 100
     uint8_t  accel_range_g;      // 2 (±2g)
     uint8_t  gyro_range_dps;     // 250 (stored as uint8_t, 250 fits)
-    uint8_t  reserved1[2];
+    uint8_t  imu_count;          // 1 or 2
+    uint8_t  reserved1[1];
     uint32_t start_time_ms;      // millis() at recording start
     char     car_id[16];         // "GeometryCar\0..."
     uint8_t  reserved2[32];      // Pad to 64 bytes total

@@ -33,7 +33,8 @@ import numpy as np
 
 SURVEY_MAGIC = b"GEOM"
 SURVEY_HEADER_SIZE = 64
-SURVEY_SAMPLE_SIZE = 18  # bytes per sample on wire
+SURVEY_SAMPLE_SIZE_V1 = 18  # bytes per sample, version 1 (single IMU)
+SURVEY_SAMPLE_SIZE_V2 = 30  # bytes per sample, version 2 (dual IMU)
 
 ACCEL_LSB_PER_G = 16384.0
 GYRO_LSB_PER_DPS = 131.0
@@ -82,6 +83,17 @@ class SurveyData:
     gyro_z: np.ndarray         # float, in °/s
     temperature: np.ndarray    # float, in °C
     position_mm: np.ndarray = field(default=None)  # computed from speed × time
+    # IMU #2 (None when single IMU)
+    accel_x2: np.ndarray = field(default=None)
+    accel_y2: np.ndarray = field(default=None)
+    accel_z2: np.ndarray = field(default=None)
+    gyro_x2: np.ndarray = field(default=None)
+    gyro_y2: np.ndarray = field(default=None)
+    gyro_z2: np.ndarray = field(default=None)
+
+    @property
+    def has_imu2(self) -> bool:
+        return self.accel_x2 is not None
 
 
 @dataclass
@@ -191,41 +203,72 @@ def parse_binary(filepath: Path) -> SurveyData:
         car_id=car_id,
     )
 
-    # Parse samples: 18 bytes each
-    # Layout: timestamp(4) + accel_xyz(6) + gyro_xyz(6) + temp(2)
+    # Determine sample size from header (v1=18, v2=30; also honor sample_size field)
+    if sample_size > 0:
+        actual_sample_size = sample_size
+    elif version >= 2:
+        actual_sample_size = SURVEY_SAMPLE_SIZE_V2
+    else:
+        actual_sample_size = SURVEY_SAMPLE_SIZE_V1
+
+    dual_imu = actual_sample_size >= SURVEY_SAMPLE_SIZE_V2
+
+    # Parse samples
     sample_data = data[SURVEY_HEADER_SIZE:]
-    n_samples = len(sample_data) // SURVEY_SAMPLE_SIZE
+    n_samples = len(sample_data) // actual_sample_size
     if n_samples == 0:
         raise ValueError("No samples in file")
 
-    remainder = len(sample_data) % SURVEY_SAMPLE_SIZE
+    remainder = len(sample_data) % actual_sample_size
     if remainder != 0:
         print(f"Warning: {remainder} trailing bytes ignored", file=sys.stderr)
-
-    # Bulk-unpack all samples at once for speed
-    sample_fmt = "<I3h3hh"  # uint32 + 3×int16 (accel) + 3×int16 (gyro) + int16 (temp)
-    assert struct.calcsize(sample_fmt) == SURVEY_SAMPLE_SIZE
 
     timestamps = np.empty(n_samples, dtype=np.uint32)
     raw_accel = np.empty((n_samples, 3), dtype=np.int16)
     raw_gyro = np.empty((n_samples, 3), dtype=np.int16)
     raw_temp = np.empty(n_samples, dtype=np.int16)
 
+    if dual_imu:
+        raw_accel2 = np.empty((n_samples, 3), dtype=np.int16)
+        raw_gyro2 = np.empty((n_samples, 3), dtype=np.int16)
+        # V2 layout: timestamp(4) + accel(6) + gyro(6) + temp(2) + accel2(6) + gyro2(6) = 30
+        sample_fmt = "<I3h3hh3h3h"
+        assert struct.calcsize(sample_fmt) == SURVEY_SAMPLE_SIZE_V2
+    else:
+        raw_accel2 = raw_gyro2 = None
+        # V1 layout: timestamp(4) + accel(6) + gyro(6) + temp(2) = 18
+        sample_fmt = "<I3h3hh"
+        assert struct.calcsize(sample_fmt) == SURVEY_SAMPLE_SIZE_V1
+
     for i in range(n_samples):
-        offset = SURVEY_HEADER_SIZE + i * SURVEY_SAMPLE_SIZE
+        offset = SURVEY_HEADER_SIZE + i * actual_sample_size
         vals = struct.unpack_from(sample_fmt, data, offset)
         timestamps[i] = vals[0]
         raw_accel[i] = vals[1:4]
         raw_gyro[i] = vals[4:7]
         raw_temp[i] = vals[7]
+        if dual_imu:
+            raw_accel2[i] = vals[8:11]
+            raw_gyro2[i] = vals[11:14]
 
     # Convert to physical units
     accel = raw_accel.astype(np.float64) / ACCEL_LSB_PER_G
     gyro = raw_gyro.astype(np.float64) / GYRO_LSB_PER_DPS
     temp = raw_temp.astype(np.float64) / TEMP_LSB_PER_DEG + TEMP_OFFSET_DEG
 
+    imu2_kwargs = {}
+    if dual_imu:
+        accel2 = raw_accel2.astype(np.float64) / ACCEL_LSB_PER_G
+        gyro2 = raw_gyro2.astype(np.float64) / GYRO_LSB_PER_DPS
+        imu2_kwargs = dict(
+            accel_x2=accel2[:, 0], accel_y2=accel2[:, 1], accel_z2=accel2[:, 2],
+            gyro_x2=gyro2[:, 0], gyro_y2=gyro2[:, 1], gyro_z2=gyro2[:, 2],
+        )
+
+    imu_label = "dual IMU" if dual_imu else "single IMU"
     print(f"Parsed {n_samples} samples from binary file "
-          f"({header.sample_rate_hz} Hz, {n_samples / header.sample_rate_hz:.1f}s)")
+          f"(v{version}, {imu_label}, {header.sample_rate_hz} Hz, "
+          f"{n_samples / header.sample_rate_hz:.1f}s)")
 
     return SurveyData(
         header=header,
@@ -238,6 +281,7 @@ def parse_binary(filepath: Path) -> SurveyData:
         gyro_y=gyro[:, 1],
         gyro_z=gyro[:, 2],
         temperature=temp,
+        **imu2_kwargs,
     )
 
 
@@ -263,7 +307,7 @@ def parse_json(filepath: Path) -> SurveyData:
     )
 
     # Browser JSON stores values already in physical units (g, °/s, °C)
-    timestamps = np.array([s["t"] for s in samples], dtype=np.uint32)
+    timestamps = np.array([s["ts"] for s in samples], dtype=np.uint32)
     accel_x = np.array([s["ax"] for s in samples], dtype=np.float64)
     accel_y = np.array([s["ay"] for s in samples], dtype=np.float64)
     accel_z = np.array([s["az"] for s in samples], dtype=np.float64)
@@ -272,8 +316,21 @@ def parse_json(filepath: Path) -> SurveyData:
     gyro_z = np.array([s["gz"] for s in samples], dtype=np.float64)
     temperature = np.array([s["temp"] for s in samples], dtype=np.float64)
 
+    # IMU #2 fields (present in version 2 JSON from dual-IMU firmware)
+    imu2_kwargs = {}
+    if "ax2" in samples[0]:
+        imu2_kwargs = dict(
+            accel_x2=np.array([s["ax2"] for s in samples], dtype=np.float64),
+            accel_y2=np.array([s["ay2"] for s in samples], dtype=np.float64),
+            accel_z2=np.array([s["az2"] for s in samples], dtype=np.float64),
+            gyro_x2=np.array([s["gx2"] for s in samples], dtype=np.float64),
+            gyro_y2=np.array([s["gy2"] for s in samples], dtype=np.float64),
+            gyro_z2=np.array([s["gz2"] for s in samples], dtype=np.float64),
+        )
+
+    imu_label = "dual IMU" if imu2_kwargs else "single IMU"
     print(f"Parsed {n} samples from JSON file "
-          f"({header.sample_rate_hz} Hz, {n / header.sample_rate_hz:.1f}s)")
+          f"({imu_label}, {header.sample_rate_hz} Hz, {n / header.sample_rate_hz:.1f}s)")
 
     return SurveyData(
         header=header,
@@ -286,6 +343,7 @@ def parse_json(filepath: Path) -> SurveyData:
         gyro_y=gyro_y,
         gyro_z=gyro_z,
         temperature=temperature,
+        **imu2_kwargs,
     )
 
 
@@ -1028,6 +1086,8 @@ def generate_report(survey: SurveyData, sections: list[Section],
     report = {
         "survey_file": survey.source_file,
         "format": survey.header.magic,
+        "version": survey.header.version,
+        "imu_count": 2 if survey.has_imu2 else 1,
         "car_id": survey.header.car_id,
         "sample_rate_hz": survey.header.sample_rate_hz,
         "duration_sec": round(duration, 1),
@@ -1171,11 +1231,21 @@ def generate_plots(survey: SurveyData, sections: list[Section],
     ax1.axhline(0, color="#444", linewidth=0.5)
     ax1.grid(True, alpha=0.3)
 
-    ax2.plot(pos_m, survey.accel_y, linewidth=0.4, color="#cc4444", alpha=0.8)
+    ax2.plot(pos_m, survey.accel_y, linewidth=0.4, color="#cc4444", alpha=0.8, label="IMU1")
     ax2.set_ylabel("Lateral (Y) [g]")
     ax2.set_xlabel("Position [m]")
     ax2.axhline(0, color="#444", linewidth=0.5)
     ax2.grid(True, alpha=0.3)
+
+    # IMU2 overlays (dashed, dimmer)
+    if survey.has_imu2:
+        az2_dynamic = survey.accel_z2 - np.mean(survey.accel_z2)
+        ax1.plot(pos_m, az2_dynamic, linewidth=0.3, color="#44cc88", alpha=0.5,
+                 linestyle="--", label="IMU2")
+        ax2.plot(pos_m, survey.accel_y2, linewidth=0.3, color="#cc8888", alpha=0.5,
+                 linestyle="--", label="IMU2")
+        ax1.legend(fontsize=8)
+        ax2.legend(fontsize=8)
 
     # Mark events
     for e in events:
@@ -1206,12 +1276,17 @@ def generate_plots(survey: SurveyData, sections: list[Section],
 
     # --- Curvature plot: yaw rate vs position ---
     fig, ax = plt.subplots(figsize=(14, 4))
-    ax.plot(pos_m, survey.gyro_z, linewidth=0.5, color="#cc44cc")
+    ax.plot(pos_m, survey.gyro_z, linewidth=0.5, color="#cc44cc", label="IMU1")
     ax.set_ylabel("Yaw Rate [°/s]")
     ax.set_xlabel("Position [m]")
     ax.set_title("Curvature Profile (Yaw Rate)")
     ax.axhline(0, color="#444", linewidth=0.5)
     ax.grid(True, alpha=0.3)
+
+    if survey.has_imu2:
+        ax.plot(pos_m, survey.gyro_z2, linewidth=0.3, color="#8844cc", alpha=0.5,
+                linestyle="--", label="IMU2")
+        ax.legend(fontsize=8)
 
     for c in curves:
         ax.axvspan(c.start_mm / 1000, c.end_mm / 1000, color="#cc44cc20")
@@ -1305,11 +1380,14 @@ def generate_plots(survey: SurveyData, sections: list[Section],
 def export_csv(survey: SurveyData, output_dir: Path):
     """Export survey data as CSV for external tools."""
     csv_path = output_dir / "survey_data.csv"
-    header = "timestamp_ms,position_mm,accel_x_g,accel_y_g,accel_z_g,gyro_x_dps,gyro_y_dps,gyro_z_dps,temperature_c\n"
+    header = "timestamp_ms,position_mm,accel_x_g,accel_y_g,accel_z_g,gyro_x_dps,gyro_y_dps,gyro_z_dps,temperature_c"
+    if survey.has_imu2:
+        header += ",accel_x2_g,accel_y2_g,accel_z2_g,gyro_x2_dps,gyro_y2_dps,gyro_z2_dps"
+    header += "\n"
     with open(csv_path, "w") as f:
         f.write(header)
         for i in range(len(survey.timestamp_ms)):
-            f.write(f"{survey.timestamp_ms[i]},"
+            line = (f"{survey.timestamp_ms[i]},"
                     f"{survey.position_mm[i]:.1f},"
                     f"{survey.accel_x[i]:.6f},"
                     f"{survey.accel_y[i]:.6f},"
@@ -1317,7 +1395,15 @@ def export_csv(survey: SurveyData, output_dir: Path):
                     f"{survey.gyro_x[i]:.4f},"
                     f"{survey.gyro_y[i]:.4f},"
                     f"{survey.gyro_z[i]:.4f},"
-                    f"{survey.temperature[i]:.1f}\n")
+                    f"{survey.temperature[i]:.1f}")
+            if survey.has_imu2:
+                line += (f",{survey.accel_x2[i]:.6f},"
+                         f"{survey.accel_y2[i]:.6f},"
+                         f"{survey.accel_z2[i]:.6f},"
+                         f"{survey.gyro_x2[i]:.4f},"
+                         f"{survey.gyro_y2[i]:.4f},"
+                         f"{survey.gyro_z2[i]:.4f}")
+            f.write(line + "\n")
     print(f"  Saved survey_data.csv ({len(survey.timestamp_ms)} rows)")
 
 

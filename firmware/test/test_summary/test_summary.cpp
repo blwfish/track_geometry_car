@@ -55,6 +55,25 @@ static void fillConstant(int16_t ax, int16_t ay, int16_t az,
     }
 }
 
+static void fillDual(int16_t ax, int16_t ay, int16_t az,
+                      int16_t gx, int16_t gy, int16_t gz,
+                      int16_t temp,
+                      int16_t ax2, int16_t ay2, int16_t az2,
+                      int16_t gx2, int16_t gy2, int16_t gz2,
+                      uint32_t count) {
+    ringBufferInit();
+    for (uint32_t i = 0; i < count; i++) {
+        imu_sample_t s = {};
+        s.timestamp_ms = i * 10;
+        s.accel_x = ax;  s.accel_y = ay;  s.accel_z = az;
+        s.gyro_x = gx;   s.gyro_y = gy;   s.gyro_z = gz;
+        s.temperature = temp;
+        s.accel_x2 = ax2; s.accel_y2 = ay2; s.accel_z2 = az2;
+        s.gyro_x2 = gx2;  s.gyro_y2 = gy2;  s.gyro_z2 = gz2;
+        ringBufferPush(&s);
+    }
+}
+
 // ===== Tests =====
 
 void test_summary_too_few_samples() {
@@ -320,6 +339,84 @@ void test_summary_timestamp_from_millis() {
     TEST_ASSERT_EQUAL_UINT32(42000, sum.timestamp_ms);
 }
 
+// ===== IMU #2 tests =====
+
+void test_summary_imu2_constant_accel() {
+    // IMU1 at 1g on Z, IMU2 at 0.5g on Z
+    fillDual(0, 0, 16384, 0, 0, 0, 0,
+             0, 0, 8192, 0, 0, 0, 100);
+
+    summary_1s_t sum;
+    _mock_millis = 5000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    // IMU1 Z RMS = 1.0g
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, sum.accel_z_rms);
+    // IMU2 Z RMS = 0.5g
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.5f, sum.accel_z2_rms);
+    // IMU2 X,Y should be zero
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_x2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_y2_rms);
+}
+
+void test_summary_imu2_gyro() {
+    // IMU1 gyro: 1 dps on X, IMU2 gyro: 2 dps on Z
+    fillDual(0, 0, 0, 131, 0, 0, 0,
+             0, 0, 0, 0, 0, 262, 100);
+
+    summary_1s_t sum;
+    _mock_millis = 5000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    // IMU1
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.0f, sum.gyro_x_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.0f, sum.gyro_x_mean);
+    // IMU2
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.0f, sum.gyro_z2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.0f, sum.gyro_z2_mean);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 0.0f, sum.gyro_x2_rms);
+}
+
+void test_summary_imu2_peak() {
+    // Push 99 zeros, then one sample with IMU2 spike
+    ringBufferInit();
+    for (int i = 0; i < 99; i++) {
+        imu_sample_t s = {};
+        s.timestamp_ms = i * 10;
+        ringBufferPush(&s);
+    }
+    imu_sample_t spike = {};
+    spike.timestamp_ms = 990;
+    spike.accel_x2 = 8192;   // 0.5g on IMU2 X
+    spike.accel_y2 = -4096;  // -0.25g on IMU2 Y
+    ringBufferPush(&spike);
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5f, sum.accel_x2_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.25f, sum.accel_y2_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_z2_peak);
+}
+
+void test_summary_imu2_zeros_when_single() {
+    // Single-IMU scenario: all IMU2 fields stay zero
+    fillConstant(0, 0, 16384, 0, 0, 0, 0, 100);
+
+    summary_1s_t sum;
+    _mock_millis = 1000;
+    TEST_ASSERT_TRUE(summaryCompute(&sum, 100, 100.0f));
+
+    // IMU2 fields should all be zero
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_x2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_y2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_z2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.accel_x2_peak);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.gyro_x2_rms);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, sum.gyro_x2_mean);
+}
+
 // ===== Runner =====
 
 int main(int argc, char **argv) {
@@ -341,5 +438,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_summary_oscillating_gyro_zero_mean);
     RUN_TEST(test_summary_mixed_polarity_accel_peak);
     RUN_TEST(test_summary_timestamp_from_millis);
+    // IMU #2 tests
+    RUN_TEST(test_summary_imu2_constant_accel);
+    RUN_TEST(test_summary_imu2_gyro);
+    RUN_TEST(test_summary_imu2_peak);
+    RUN_TEST(test_summary_imu2_zeros_when_single);
     return UNITY_END();
 }

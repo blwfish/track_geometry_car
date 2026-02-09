@@ -148,10 +148,14 @@ void setup() {
     ESP_ERROR_CHECK(esp_timer_create(&timerArgs, &imuTimer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(imuTimer, IMU_SAMPLE_INTERVAL_US));
 
-    Serial.println("\ntimestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c");
+    if (imuGetCount() > 1) {
+        Serial.println("\ntimestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c,ax2_g,ay2_g,az2_g,gx2_dps,gy2_dps,gz2_dps");
+    } else {
+        Serial.println("\ntimestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c");
+    }
 
     lastStatsReport = millis();
-    Serial.println("Setup complete. Sampling at 100Hz.\n");
+    Serial.printf("Setup complete. Sampling at 100Hz. IMU count: %u\n\n", imuGetCount());
 }
 
 // ===== Main Loop =====
@@ -209,7 +213,7 @@ void loop() {
 
         const imu_sample_t *latest = ringBufferGetRecent(0);
         if (latest) {
-            Serial.printf("%lu,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.1f\n",
+            Serial.printf("%lu,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.1f",
                 (unsigned long)latest->timestamp_ms,
                 imuAccelG(latest->accel_x),
                 imuAccelG(latest->accel_y),
@@ -218,6 +222,16 @@ void loop() {
                 imuGyroDPS(latest->gyro_y),
                 imuGyroDPS(latest->gyro_z),
                 imuTemperatureC(latest->temperature));
+            if (imuGetCount() > 1) {
+                Serial.printf(",%.4f,%.4f,%.4f,%.2f,%.2f,%.2f",
+                    imuAccelG(latest->accel_x2),
+                    imuAccelG(latest->accel_y2),
+                    imuAccelG(latest->accel_z2),
+                    imuGyroDPS(latest->gyro_x2),
+                    imuGyroDPS(latest->gyro_y2),
+                    imuGyroDPS(latest->gyro_z2));
+            }
+            Serial.println();
         }
     }
 

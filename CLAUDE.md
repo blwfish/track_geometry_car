@@ -66,7 +66,8 @@ python3 -m venv .venv && .venv/bin/pip install numpy matplotlib
 ## Hardware
 
 - **MCU**: ESP32-WROOM-32 devkit (Xtensa LX6, not C3/RISC-V)
-- **IMU**: MPU-6050 (GY-521 breakout), I2C address 0x68
+- **IMU**: MPU-6050 (GY-521 breakout), I2C address 0x68 (primary, required)
+- **IMU #2**: MPU-6050 at 0x69 (AD0=HIGH, optional — auto-detected at boot)
 - **OLED**: SSD1315 0.96" 128x64, I2C address 0x3C (uses SSD1306 driver)
 - **I2C pins**: SDA=GPIO21, SCL=GPIO22, 400kHz
 
@@ -81,7 +82,7 @@ Modules are independent with clean interfaces (no cross-includes between peers):
 |--------|-------|-----------|--------------------|
 | config | config.h | No | N/A (definitions only) |
 | ring_buffer | ring_buffer.h/cpp | No | Yes (11 tests) |
-| summary | summary.h/cpp | No* | Yes* (16 tests) |
+| summary | summary.h/cpp | No* | Yes* (20 tests) |
 | geometry | geometry.h/cpp | No | Yes (37 tests) |
 | imu | imu.h/cpp | Yes (I2C) | No |
 | display | display.h/cpp | Yes (I2C) | No |
@@ -100,8 +101,11 @@ and sparkline auto-scaling. All functions are hardware-independent.
 
 - **100Hz sampling via esp_timer** with `volatile uint32_t` counter (not bool flag —
   bool loses samples when OLED I2C holds the bus)
-- **Struct padding**: `imu_sample_t` is 18 logical bytes but 20 in memory due to
-  alignment. WebSocket serialization is field-by-field, not memcpy.
+- **Struct padding**: `imu_sample_t` is 30 logical bytes (18 IMU1 + 12 IMU2) but
+  larger in memory due to alignment. WebSocket/flash serialization is field-by-field.
+- **Dual IMU**: IMU #2 at 0x69 is auto-detected. When absent, all IMU2 fields are
+  zero-filled (memset in imuReadSample). Wire format is always 30 bytes/sample;
+  survey files use version 1 (single) or 2 (dual) in the header.
 - **`summary_1s_t`** is all 4-byte aligned fields, safe to memcpy for WebSocket.
 - **Dual-color OLED**: SSD1315 has yellow rows 0-15, blue rows 16-63. Text layout
   accounts for this.
@@ -127,7 +131,7 @@ captive portal auto-opens dashboard. If not, navigate to http://192.168.4.1.
 - [ ] Phase 7: Validation & refinement
 - [ ] Future: MQTT throttle control (autonomous survey speed via JMRI)
 - [ ] Future: Clearance detector (pivoting arm + hall sensor)
-- [ ] Future: Dual IMU (MPU-6050 x2, 0x68 + 0x69) for differential geometry
+- [x] Dual IMU support (MPU-6050 x2, 0x68 + 0x69, graceful single-IMU fallback)
 - [ ] Future: ESP32-CAM wheelset camera (standalone, MJPEG stream)
 - [ ] Future: 3D printed PRR F43 depressed-center flat car body
 

@@ -240,6 +240,13 @@ void webServerSendSamples(const imu_sample_t *samples, uint8_t count) {
         memcpy(&buf[off + 12], &s->gyro_y, 2);
         memcpy(&buf[off + 14], &s->gyro_z, 2);
         memcpy(&buf[off + 16], &s->temperature, 2);
+        // IMU #2 fields (zero when single-IMU)
+        memcpy(&buf[off + 18], &s->accel_x2, 2);
+        memcpy(&buf[off + 20], &s->accel_y2, 2);
+        memcpy(&buf[off + 22], &s->accel_z2, 2);
+        memcpy(&buf[off + 24], &s->gyro_x2, 2);
+        memcpy(&buf[off + 26], &s->gyro_y2, 2);
+        memcpy(&buf[off + 28], &s->gyro_z2, 2);
     }
 
     wsSendToHealthyClients(buf, frameSize);
