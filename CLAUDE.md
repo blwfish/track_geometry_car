@@ -99,4 +99,14 @@ captive portal auto-opens dashboard. If not, navigate to http://192.168.4.1.
 - [ ] Future: ESP32-CAM wheelset camera (standalone, MJPEG stream)
 - [ ] Future: 3D printed PRR F43 depressed-center flat car body
 
+## Related Projects
+
+- **test-and-calibration-track** — Automated loco speed calibration with vibration
+  analysis. Identifies the quietest locomotive in the fleet for geometry survey duty
+  (least mechanical noise coupling through couplers/rails into the IMU). Also provides
+  calibrated speed tables so the geometry car knows its true velocity from the
+  commanded speed step, enabling accurate spatial measurement without an on-car
+  speed sensor.
+- **esp32-config** — Shared MQTT infrastructure and ESP32 patterns.
+
 See `docs/FUTURE_PLANS.md` for detailed notes on all future ideas.
