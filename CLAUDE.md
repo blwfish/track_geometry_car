@@ -61,6 +61,7 @@ Modules are independent with clean interfaces (no cross-includes between peers):
 | display | display.h/cpp | Yes (I2C) | No |
 | wifi_manager | wifi_manager.h/cpp | Yes (WiFi) | No |
 | web_server | web_server.h/cpp | Yes (WiFi) | No |
+| flash_logger | flash_logger.h/cpp | Yes (LittleFS) | No |
 
 *summary.cpp calls `imuAccelG()`/`imuGyroDPS()` and `ringBufferGetRecent()` —
 these are mockable for native tests.
@@ -89,7 +90,13 @@ captive portal auto-opens dashboard. If not, navigate to http://192.168.4.1.
 - [x] Phase 1: IMU + OLED + ring buffer + 100Hz sampling
 - [x] Phase 2: WiFi AP + WebSocket + browser dashboard
 - [ ] Phase 3: INA219 power monitor (hardware arriving)
-- [ ] Phase 4: Flash logging & download
+- [x] Phase 4: Flash logging & download (LittleFS, ~14 min capacity)
+- [ ] Phase 4b: Micro-SD card logging (SdFat, FAT32, format-on-first-use)
 - [ ] Phase 5: Calibration & NVS storage
 - [ ] Phase 6: Analysis script (Python)
 - [ ] Phase 7: Validation & refinement
+- [ ] Future: Dual IMU (MPU-6050 x2, 0x68 + 0x69) for differential geometry
+- [ ] Future: ESP32-CAM wheelset camera (standalone, MJPEG stream)
+- [ ] Future: 3D printed PRR F43 depressed-center flat car body
+
+See `docs/FUTURE_PLANS.md` for detailed notes on all future ideas.
