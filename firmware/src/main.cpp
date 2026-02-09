@@ -5,6 +5,9 @@
 #include "imu.h"
 #include "ring_buffer.h"
 #include "display.h"
+#include "wifi_manager.h"
+#include "web_server.h"
+#include "summary.h"
 
 // ===== Timer counter =====
 // Incremented by hardware timer callback, decremented by main loop.
@@ -21,9 +24,22 @@ static uint32_t sampleCountAtLastReport = 0;
 static unsigned long lastStatsReport     = 0;
 static float measuredSamplesPerSec       = 0.0f;
 
+// ===== WebSocket sample accumulation =====
+static imu_sample_t wsSampleBatch[WS_SAMPLE_BATCH_SIZE];
+static uint8_t wsSampleCount = 0;
+
+// ===== Latest summary =====
+static summary_1s_t latestSummary;
+
+// ===== WiFi state =====
+static bool wifiReady = false;
+
 // ===== Non-blocking task timers =====
 static unsigned long lastOledUpdate    = 0;
 static unsigned long lastSerialOutput  = 0;
+static unsigned long lastWsSend        = 0;
+static unsigned long lastSummary       = 0;
+static unsigned long lastWsCleanup     = 0;
 
 // ===== Hardware timer =====
 static esp_timer_handle_t imuTimer = nullptr;
@@ -63,6 +79,20 @@ void setup() {
         while (true) { delay(1000); }  // Halt - can't proceed without IMU
     }
 
+    // Initialize WiFi AP (before starting timer)
+    if (wifiInit()) {
+        wifiReady = true;
+        webServerInit();
+
+        // Show WiFi info on OLED
+        char ipBuf[16];
+        wifiGetIP(ipBuf, sizeof(ipBuf));
+        displayWiFiInfo(WIFI_AP_SSID, ipBuf);
+        delay(2500);  // Show WiFi info screen
+    } else {
+        Serial.println("[WARN] WiFi init failed - continuing without WiFi");
+    }
+
     // Start 100Hz sampling timer
     const esp_timer_create_args_t timerArgs = {
         .callback = imuTimerCallback,
@@ -84,6 +114,11 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
+    // --- Captive portal DNS processing ---
+    if (wifiReady) {
+        wifiProcessDNS();
+    }
+
     // --- 100Hz IMU sampling (counter-driven) ---
     // Drain all pending samples — catches up after OLED writes hold the bus
     while (imuSamplesPending > 0) {
@@ -93,9 +128,24 @@ void loop() {
         if (imuReadSample(&sample)) {
             ringBufferPush(&sample);
             totalSamples++;
+
+            // Accumulate for WebSocket batch
+            if (wsSampleCount < WS_SAMPLE_BATCH_SIZE) {
+                wsSampleBatch[wsSampleCount++] = sample;
+            }
         } else {
             droppedSamples++;
         }
+    }
+
+    // --- 10Hz WebSocket sample broadcast ---
+    if (now - lastWsSend >= WS_SEND_INTERVAL_MS) {
+        lastWsSend = now;
+
+        if (wifiReady && webServerClientCount() > 0 && wsSampleCount > 0) {
+            webServerSendSamples(wsSampleBatch, wsSampleCount);
+        }
+        wsSampleCount = 0;  // Reset regardless
     }
 
     // --- 10Hz Serial CSV output ---
@@ -116,14 +166,33 @@ void loop() {
         }
     }
 
+    // --- 1Hz Summary computation + WebSocket broadcast ---
+    if (now - lastSummary >= SUMMARY_INTERVAL_MS) {
+        lastSummary = now;
+
+        if (summaryCompute(&latestSummary, totalSamples, measuredSamplesPerSec)) {
+            if (wifiReady && webServerClientCount() > 0) {
+                webServerSendSummary(&latestSummary);
+            }
+        }
+    }
+
     // --- 5Hz OLED update ---
     if (now - lastOledUpdate >= OLED_UPDATE_INTERVAL_MS) {
         lastOledUpdate = now;
 
         const imu_sample_t *latest = ringBufferGetRecent(0);
         if (latest) {
-            displayUpdate(latest, totalSamples, droppedSamples, measuredSamplesPerSec);
+            uint8_t clients = wifiReady ? wifiClientCount() : 0;
+            displayUpdate(latest, totalSamples, droppedSamples,
+                          measuredSamplesPerSec, clients);
         }
+    }
+
+    // --- 0.5Hz WebSocket cleanup ---
+    if (wifiReady && now - lastWsCleanup >= WS_CLEANUP_INTERVAL_MS) {
+        lastWsCleanup = now;
+        webServerCleanup();
     }
 
     // --- 0.1Hz Stats report (every 10 seconds) ---
@@ -132,12 +201,13 @@ void loop() {
         float elapsed = (now - lastStatsReport) / 1000.0f;
         measuredSamplesPerSec = samplesThisPeriod / elapsed;
 
-        Serial.printf("# Stats: %.1f Hz (%lu samples, %lu dropped, %lu total, %lu free heap)\n",
+        Serial.printf("# Stats: %.1f Hz (%lu samples, %lu dropped, %lu total, %lu free heap, %u WS clients)\n",
             measuredSamplesPerSec,
             (unsigned long)samplesThisPeriod,
             (unsigned long)droppedSamples,
             (unsigned long)totalSamples,
-            (unsigned long)ESP.getFreeHeap());
+            (unsigned long)ESP.getFreeHeap(),
+            wifiReady ? webServerClientCount() : 0);
 
         sampleCountAtLastReport = totalSamples;
         lastStatsReport = now;

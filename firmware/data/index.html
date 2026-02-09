@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Track Geometry Car</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    overflow-x: hidden;
+}
+#status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+}
+.status-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+.dot-green { background: #4ade80; }
+.dot-red { background: #ef4444; animation: pulse 1s infinite; }
+.dot-rec { background: #ef4444; animation: pulse 0.5s infinite; }
+@keyframes pulse { 50% { opacity: 0.4; } }
+#chart-container {
+    padding: 4px;
+    position: relative;
+}
+canvas {
+    width: 100%;
+    height: 35vh;
+    min-height: 180px;
+    display: block;
+    background: #0f0f23;
+    border-radius: 4px;
+}
+#trace-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 12px;
+    justify-content: center;
+}
+.trace-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: #16213e;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+.trace-toggle.off { opacity: 0.35; }
+.trace-swatch {
+    width: 12px; height: 12px;
+    border-radius: 2px;
+}
+#readouts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 8px 12px;
+}
+.readout-group {
+    background: #16213e;
+    border-radius: 4px;
+    padding: 8px;
+}
+.readout-group h3 {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+    font-weight: normal;
+    text-transform: uppercase;
+}
+.readout-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    line-height: 1.6;
+}
+.readout-label { color: #888; }
+.readout-val { color: #e0e0e0; text-align: right; }
+#recording-bar {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    align-items: center;
+    justify-content: center;
+}
+button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+#btn-start {
+    background: #166534;
+    color: #fff;
+}
+#btn-stop {
+    background: #991b1b;
+    color: #fff;
+    display: none;
+}
+#btn-save {
+    background: #1e40af;
+    color: #fff;
+    display: none;
+}
+button:disabled { opacity: 0.4; cursor: default; }
+#rec-info {
+    font-size: 12px;
+    color: #888;
+}
+@media (min-width: 601px) {
+    canvas { height: 400px; min-height: 300px; }
+    #readouts { grid-template-columns: 1fr 1fr 1fr; }
+}
+/* Landscape phone: taller chart, compact readouts */
+@media (orientation: landscape) and (max-height: 500px) {
+    canvas { height: 55vh; min-height: 150px; }
+    #readouts { grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; padding: 4px 8px; }
+    .readout-group { padding: 4px 6px; }
+    #recording-bar { padding: 4px 8px; }
+    button { padding: 6px 14px; font-size: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div id="status-bar">
+    <span id="conn-status"><span class="status-dot dot-red"></span>Connecting...</span>
+    <span id="rec-status"></span>
+</div>
+
+<div id="chart-container">
+    <canvas id="chart"></canvas>
+</div>
+
+<div id="trace-controls"></div>
+
+<div id="readouts">
+    <div class="readout-group">
+        <h3>Accel RMS (g)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="ax-rms">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="ay-rms">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="az-rms">-</span></div>
+    </div>
+    <div class="readout-group">
+        <h3>Accel Peak (g)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="ax-pk">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="ay-pk">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="az-pk">-</span></div>
+    </div>
+    <div class="readout-group">
+        <h3>Gyro (°/s)</h3>
+        <div class="readout-row"><span class="readout-label">X</span><span class="readout-val" id="gx-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Y</span><span class="readout-val" id="gy-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Z</span><span class="readout-val" id="gz-val">-</span></div>
+    </div>
+    <div class="readout-group">
+        <h3>System</h3>
+        <div class="readout-row"><span class="readout-label">Temp</span><span class="readout-val" id="temp-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Rate</span><span class="readout-val" id="rate-val">-</span></div>
+        <div class="readout-row"><span class="readout-label">Samples</span><span class="readout-val" id="count-val">-</span></div>
+    </div>
+</div>
+
+<div id="recording-bar">
+    <button id="btn-start" onclick="startRec()">Start Recording</button>
+    <button id="btn-stop" onclick="stopRec()">Stop Recording</button>
+    <button id="btn-save" onclick="saveRec()">Save Survey</button>
+    <span id="rec-info"></span>
+</div>
+
+<script>
+// ===== Configuration =====
+const ACCEL_SCALE = 16384.0;
+const GYRO_SCALE = 131.0;
+const TEMP_SCALE = 340.0;
+const TEMP_OFFSET = 36.53;
+const CHART_SECONDS = 30;
+const MAX_POINTS = CHART_SECONDS * 100;
+
+// ===== Trace definitions =====
+const TRACES = [
+    { key: 'ax', label: 'aX', color: '#ff4444', group: 'accel', on: true },
+    { key: 'ay', label: 'aY', color: '#44ff44', group: 'accel', on: true },
+    { key: 'az', label: 'aZ', color: '#4488ff', group: 'accel', on: true },
+    { key: 'gx', label: 'gX', color: '#ffaa44', group: 'gyro', on: true },
+    { key: 'gy', label: 'gY', color: '#aa44ff', group: 'gyro', on: true },
+    { key: 'gz', label: 'gZ', color: '#44ffff', group: 'gyro', on: true },
+];
+
+// ===== Data store (circular typed arrays) =====
+const data = {};
+TRACES.forEach(t => data[t.key] = new Float32Array(MAX_POINTS));
+let dataHead = 0, dataCount = 0;
+
+// ===== Recording state =====
+let recording = false;
+let recSamples = [];
+let recStart = 0;
+let recTimer = null;
+
+// ===== WebSocket =====
+let ws = null;
+let reconnectTimer = null;
+
+function wsConnect() {
+    const url = 'ws://' + location.host + '/ws';
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+        document.getElementById('conn-status').innerHTML =
+            '<span class="status-dot dot-green"></span>Connected';
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    };
+
+    ws.onclose = () => {
+        document.getElementById('conn-status').innerHTML =
+            '<span class="status-dot dot-red"></span>Disconnected';
+        reconnectTimer = setTimeout(wsConnect, 2000);
+    };
+
+    ws.onerror = () => ws.close();
+    ws.onmessage = (ev) => parseFrame(ev.data);
+}
+
+function parseFrame(buf) {
+    const v = new DataView(buf);
+    const type = v.getUint8(0);
+
+    if (type === 0x01) {
+        // Raw sample batch
+        const count = v.getUint8(1);
+        for (let i = 0; i < count; i++) {
+            const o = 2 + i * 18;
+            const s = {
+                ts: v.getUint32(o, true),
+                ax: v.getInt16(o + 4, true) / ACCEL_SCALE,
+                ay: v.getInt16(o + 6, true) / ACCEL_SCALE,
+                az: v.getInt16(o + 8, true) / ACCEL_SCALE,
+                gx: v.getInt16(o + 10, true) / GYRO_SCALE,
+                gy: v.getInt16(o + 12, true) / GYRO_SCALE,
+                gz: v.getInt16(o + 14, true) / GYRO_SCALE,
+                temp: v.getInt16(o + 16, true) / TEMP_SCALE + TEMP_OFFSET
+            };
+            addSample(s);
+            if (recording) recSamples.push(s);
+        }
+    } else if (type === 0x02) {
+        // 1-second summary
+        parseSummary(v);
+    }
+}
+
+function addSample(s) {
+    const idx = dataHead;
+    TRACES.forEach(t => data[t.key][idx] = s[t.key]);
+    dataHead = (dataHead + 1) % MAX_POINTS;
+    if (dataCount < MAX_POINTS) dataCount++;
+}
+
+function parseSummary(v) {
+    // summary_1s_t layout: timestamp(4) + 13 floats(52) + sample_count(4) + sample_rate(4)
+    // Byte 0 is frame type (0x02), data starts at byte 1
+    let o = 1;
+    const f = () => { const val = v.getFloat32(o, true); o += 4; return val; };
+    const u = () => { const val = v.getUint32(o, true); o += 4; return val; };
+
+    u(); // timestamp_ms — skip
+    const axRms = f(), ayRms = f(), azRms = f();
+    const axPk = f(), ayPk = f(), azPk = f();
+    const gxRms = f(), gyRms = f(), gzRms = f();
+    f(); f(); f(); // gyro means — skip for now
+    const temp = f();
+    const count = u();
+    const rate = f();
+
+    document.getElementById('ax-rms').textContent = axRms.toFixed(4);
+    document.getElementById('ay-rms').textContent = ayRms.toFixed(4);
+    document.getElementById('az-rms').textContent = azRms.toFixed(4);
+    document.getElementById('ax-pk').textContent = axPk.toFixed(4);
+    document.getElementById('ay-pk').textContent = ayPk.toFixed(4);
+    document.getElementById('az-pk').textContent = azPk.toFixed(4);
+    document.getElementById('gx-val').textContent = gxRms.toFixed(2);
+    document.getElementById('gy-val').textContent = gyRms.toFixed(2);
+    document.getElementById('gz-val').textContent = gzRms.toFixed(2);
+    document.getElementById('temp-val').textContent = temp.toFixed(1) + '°C';
+    document.getElementById('count-val').textContent = count.toLocaleString();
+    document.getElementById('rate-val').textContent = rate.toFixed(1) + ' Hz';
+}
+
+// ===== Strip Chart =====
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * (window.devicePixelRatio || 1);
+    canvas.height = rect.height * (window.devicePixelRatio || 1);
+    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+}
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 150));
+resizeCanvas();
+
+function findRange(traces, nPoints) {
+    let yMin = Infinity, yMax = -Infinity;
+    for (const t of traces) {
+        for (let i = 0; i < nPoints; i++) {
+            const di = (dataHead - dataCount + Math.floor(i * dataCount / nPoints) + MAX_POINTS) % MAX_POINTS;
+            const val = data[t.key][di];
+            if (val < yMin) yMin = val;
+            if (val > yMax) yMax = val;
+        }
+    }
+    const range = yMax - yMin || 0.01;
+    return { min: yMin - range * 0.1, max: yMax + range * 0.1 };
+}
+
+function drawChart() {
+    const w = canvas.getBoundingClientRect().width;
+    const h = canvas.getBoundingClientRect().height;
+
+    const activeAccel = TRACES.filter(t => t.on && t.group === 'accel');
+    const activeGyro = TRACES.filter(t => t.on && t.group === 'gyro');
+    const hasAccel = activeAccel.length > 0;
+    const hasGyro = activeGyro.length > 0;
+
+    // Adjust margins: right margin grows when gyro axis is visible
+    const margin = { top: 10, right: hasGyro ? 50 : 10, bottom: 20, left: hasAccel ? 50 : 10 };
+    // If only gyro is active, shrink left; if only accel, shrink right
+    if (!hasAccel && hasGyro) margin.left = 10;
+    if (hasAccel && !hasGyro) margin.right = 10;
+    const plotW = w - margin.left - margin.right;
+    const plotH = h - margin.top - margin.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+
+    if (dataCount < 2) {
+        ctx.fillStyle = '#444';
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Waiting for data...', w / 2, h / 2);
+        requestAnimationFrame(drawChart);
+        return;
+    }
+
+    if (!hasAccel && !hasGyro) {
+        requestAnimationFrame(drawChart);
+        return;
+    }
+
+    const nPoints = Math.min(dataCount, Math.ceil(plotW));
+    const gridLines = 5;
+
+    // Compute independent ranges
+    const accelRange = hasAccel ? findRange(activeAccel, nPoints) : null;
+    const gyroRange = hasGyro ? findRange(activeGyro, nPoints) : null;
+
+    // Draw grid
+    ctx.strokeStyle = '#1a2a4a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= gridLines; i++) {
+        const y = margin.top + (plotH * i / gridLines);
+        ctx.beginPath();
+        ctx.moveTo(margin.left, y);
+        ctx.lineTo(w - margin.right, y);
+        ctx.stroke();
+    }
+
+    // Left axis — Accel (g) — tinted blue to match accel color group
+    if (hasAccel) {
+        ctx.fillStyle = '#6688cc';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        for (let i = 0; i <= gridLines; i++) {
+            const val = accelRange.max - (accelRange.max - accelRange.min) * i / gridLines;
+            const y = margin.top + (plotH * i / gridLines);
+            ctx.fillText(val.toFixed(3), margin.left - 4, y + 3);
+        }
+        // Axis label
+        ctx.save();
+        ctx.translate(10, margin.top + plotH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillText('g', 0, 0);
+        ctx.restore();
+    }
+
+    // Right axis — Gyro (°/s) — tinted orange to match gyro color group
+    if (hasGyro) {
+        ctx.fillStyle = '#ccaa66';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        for (let i = 0; i <= gridLines; i++) {
+            const val = gyroRange.max - (gyroRange.max - gyroRange.min) * i / gridLines;
+            const y = margin.top + (plotH * i / gridLines);
+            ctx.fillText(val.toFixed(1), w - margin.right + 4, y + 3);
+        }
+        // Axis label
+        ctx.save();
+        ctx.translate(w - 4, margin.top + plotH / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillText('\u00b0/s', 0, 0);
+        ctx.restore();
+    }
+
+    // Time axis labels
+    ctx.fillStyle = '#666';
+    ctx.textAlign = 'center';
+    const secVisible = dataCount / 100;
+    for (let s = 0; s <= Math.min(secVisible, CHART_SECONDS); s += 5) {
+        if (s === 0) continue;
+        const x = margin.left + plotW - (s / secVisible) * plotW;
+        if (x < margin.left) break;
+        ctx.fillText('-' + s + 's', x, h - 4);
+    }
+
+    // Draw traces — each group uses its own Y scale
+    ctx.lineWidth = 1.5;
+    const allActive = [...activeAccel, ...activeGyro];
+    for (const t of allActive) {
+        const range = t.group === 'accel' ? accelRange : gyroRange;
+        ctx.strokeStyle = t.color;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < nPoints; i++) {
+            const di = (dataHead - dataCount + Math.floor(i * dataCount / nPoints) + MAX_POINTS) % MAX_POINTS;
+            const val = data[t.key][di];
+            const x = margin.left + (i / nPoints) * plotW;
+            const y = margin.top + plotH - ((val - range.min) / (range.max - range.min)) * plotH;
+            if (!started) { ctx.moveTo(x, y); started = true; }
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    requestAnimationFrame(drawChart);
+}
+requestAnimationFrame(drawChart);
+
+// ===== Trace toggle buttons =====
+const tcDiv = document.getElementById('trace-controls');
+TRACES.forEach((t, i) => {
+    const el = document.createElement('div');
+    el.className = 'trace-toggle' + (t.on ? '' : ' off');
+    el.innerHTML = `<span class="trace-swatch" style="background:${t.color}"></span>${t.label}`;
+    el.onclick = () => {
+        t.on = !t.on;
+        el.className = 'trace-toggle' + (t.on ? '' : ' off');
+    };
+    tcDiv.appendChild(el);
+});
+
+// ===== Recording =====
+function startRec() {
+    recording = true;
+    recSamples = [];
+    recStart = Date.now();
+    document.getElementById('btn-start').style.display = 'none';
+    document.getElementById('btn-stop').style.display = '';
+    document.getElementById('btn-save').style.display = 'none';
+    document.getElementById('rec-status').innerHTML =
+        '<span class="status-dot dot-rec"></span><span id="rec-time">0:00</span>';
+
+    // Send start command to ESP32
+    if (ws && ws.readyState === 1) ws.send(new Uint8Array([0x10]));
+
+    recTimer = setInterval(() => {
+        const sec = Math.floor((Date.now() - recStart) / 1000);
+        const m = Math.floor(sec / 60);
+        const s = (sec % 60).toString().padStart(2, '0');
+        document.getElementById('rec-time').textContent = m + ':' + s;
+    }, 1000);
+}
+
+function stopRec() {
+    recording = false;
+    clearInterval(recTimer);
+    document.getElementById('btn-start').style.display = '';
+    document.getElementById('btn-stop').style.display = 'none';
+    document.getElementById('btn-save').style.display = '';
+    document.getElementById('rec-status').innerHTML = '';
+
+    // Send stop command to ESP32
+    if (ws && ws.readyState === 1) ws.send(new Uint8Array([0x11]));
+
+    const dur = ((Date.now() - recStart) / 1000).toFixed(1);
+    document.getElementById('rec-info').textContent =
+        recSamples.length.toLocaleString() + ' samples, ' + dur + 's';
+}
+
+function saveRec() {
+    const survey = {
+        version: 1,
+        car: 'GeometryCar',
+        start_time: new Date(recStart).toISOString(),
+        duration_sec: (Date.now() - recStart) / 1000,
+        sample_rate_hz: 100,
+        accel_range_g: 2,
+        gyro_range_dps: 250,
+        samples: recSamples
+    };
+    const blob = new Blob([JSON.stringify(survey)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'survey_' + new Date().toISOString().replace(/[:.]/g, '') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ===== Init =====
+wsConnect();
+</script>
+</body>
+</html>

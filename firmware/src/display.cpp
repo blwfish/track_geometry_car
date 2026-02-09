@@ -45,17 +45,32 @@ void displayError(const char *message) {
     u8g2.sendBuffer();
 }
 
+void displayWiFiInfo(const char *ssid, const char *ip) {
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "Track Geometry Car");
+    u8g2.setFont(u8g2_font_5x7_tf);
+    char line[28];
+    snprintf(line, sizeof(line), "WiFi: %s", ssid);
+    u8g2.drawStr(0, 24, line);
+    u8g2.drawStr(0, 34, "(open - no password)");
+    snprintf(line, sizeof(line), "IP: %s", ip);
+    u8g2.drawStr(0, 48, line);
+    u8g2.sendBuffer();
+}
+
 void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
-                   uint32_t droppedSamples, float samplesPerSec) {
+                   uint32_t droppedSamples, float samplesPerSec,
+                   uint8_t wifiClients) {
     char line[28];  // 128px / 5px per char = 25 chars + margin
 
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_5x7_tf);
 
     // === YELLOW ZONE (rows 0-15): Status line ===
-    snprintf(line, sizeof(line), "%.0fHz  %luS  d:%lu",
+    snprintf(line, sizeof(line), "%.0fHz %luS W:%u",
              samplesPerSec, (unsigned long)totalSamples,
-             (unsigned long)droppedSamples);
+             wifiClients);
     u8g2.drawStr(0, 7, line);
 
     // === BLUE ZONE (rows 16-63): Data ===

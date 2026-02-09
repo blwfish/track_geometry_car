@@ -12,9 +12,13 @@ void displayStartup(const char *version);
 // Show an error message (large font, centered). Blocks display until next call.
 void displayError(const char *message);
 
+// Show WiFi AP info screen. Call during setup after WiFi init.
+void displayWiFiInfo(const char *ssid, const char *ip);
+
 // Update the live display with current IMU data and stats.
 // Called at OLED_UPDATE_INTERVAL_MS rate from main loop.
 void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
-                   uint32_t droppedSamples, float samplesPerSec);
+                   uint32_t droppedSamples, float samplesPerSec,
+                   uint8_t wifiClients);
 
 #endif // DISPLAY_H
