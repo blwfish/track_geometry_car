@@ -1,9 +1,15 @@
 #include "web_server.h"
+#include "flash_logger.h"
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 
 static AsyncWebServer server(80);
 static AsyncWebSocket ws(WS_PATH);
+
+// Recording request flag: set from async WS handler, polled from main loop.
+// volatile because it's written from the async WebSocket callback context
+// and read from the main loop.
+static volatile int8_t recordingRequest = 0;  // 1=start, -1=stop, 0=none
 
 // ===== WebSocket event handler =====
 
@@ -18,15 +24,16 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("[WS] Client #%u disconnected\n", client->id());
             break;
         case WS_EVT_DATA: {
-            // Binary commands from client
             if (len >= 1) {
                 uint8_t cmd = data[0];
                 switch (cmd) {
                     case WS_CMD_START_RECORDING:
                         Serial.println("[WS] Command: Start recording");
+                        recordingRequest = 1;
                         break;
                     case WS_CMD_STOP_RECORDING:
                         Serial.println("[WS] Command: Stop recording");
+                        recordingRequest = -1;
                         break;
                     case WS_CMD_CALIBRATE:
                         Serial.println("[WS] Command: Calibrate");
@@ -49,40 +56,128 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
 // ===== Captive portal redirect =====
 
 static void handleCaptivePortal(AsyncWebServerRequest *request) {
-    // Android captive portal detection
     if (request->host() == "connectivitycheck.gstatic.com" ||
         request->host() == "clients3.google.com") {
         request->redirect("http://192.168.4.1/");
         return;
     }
-    // Apple captive portal detection
     if (request->host() == "captive.apple.com") {
         request->redirect("http://192.168.4.1/");
         return;
     }
-    // Windows captive portal detection
     if (request->host() == "www.msftconnecttest.com") {
         request->redirect("http://192.168.4.1/");
         return;
     }
-    // Generic: if host is not our IP, redirect
     if (request->host() != "192.168.4.1") {
         request->redirect("http://192.168.4.1/");
         return;
     }
-    // If we get here, serve from LittleFS
     request->send(LittleFS, "/index.html", "text/html");
+}
+
+// ===== Survey API handlers =====
+
+// GET /api/surveys — list saved survey files as JSON array
+static void handleListSurveys(AsyncWebServerRequest *request) {
+    String json = "[";
+    File dir = LittleFS.open(SURVEY_DIR);
+    if (dir && dir.isDirectory()) {
+        bool first = true;
+        File entry;
+        while ((entry = dir.openNextFile())) {
+            if (!entry.isDirectory()) {
+                size_t sz = entry.size();
+                uint32_t samples = (sz > SURVEY_HEADER_SIZE)
+                    ? (sz - SURVEY_HEADER_SIZE) / SURVEY_SAMPLE_SIZE : 0;
+                float duration = samples / 100.0f;
+
+                if (!first) json += ",";
+                first = false;
+                json += "{\"name\":\"";
+                json += entry.name();
+                json += "\",\"size\":";
+                json += String(sz);
+                json += ",\"samples\":";
+                json += String(samples);
+                json += ",\"duration_sec\":";
+                json += String(duration, 1);
+                json += "}";
+            }
+            entry.close();
+        }
+        dir.close();
+    }
+    json += "]";
+    request->send(200, "application/json", json);
+}
+
+// GET /api/survey/* — download a survey file
+static void handleDownloadSurvey(AsyncWebServerRequest *request) {
+    // URL is /api/survey/survey_0001.bin — extract filename after last /
+    String url = request->url();
+    int lastSlash = url.lastIndexOf('/');
+    if (lastSlash < 0) {
+        request->send(404, "text/plain", "Not found");
+        return;
+    }
+    String filename = url.substring(lastSlash + 1);
+    String path = String(SURVEY_DIR) + "/" + filename;
+
+    if (!LittleFS.exists(path)) {
+        request->send(404, "text/plain", "Not found");
+        return;
+    }
+
+    AsyncWebServerResponse *response = request->beginResponse(
+        LittleFS, path, "application/octet-stream");
+    response->addHeader("Content-Disposition",
+        "attachment; filename=\"" + filename + "\"");
+    request->send(response);
+}
+
+// DELETE /api/survey/* — delete a survey file
+static void handleDeleteSurvey(AsyncWebServerRequest *request) {
+    String url = request->url();
+    int lastSlash = url.lastIndexOf('/');
+    if (lastSlash < 0) {
+        request->send(404, "text/plain", "Not found");
+        return;
+    }
+    String filename = url.substring(lastSlash + 1);
+
+    if (flashLoggerDelete(filename.c_str())) {
+        request->send(200, "text/plain", "OK");
+    } else {
+        request->send(404, "text/plain", "Not found");
+    }
+}
+
+// GET /api/status — recording status + flash info
+static void handleStatus(AsyncWebServerRequest *request) {
+    String json = "{";
+    json += "\"recording\":";
+    json += flashLoggerIsRecording() ? "true" : "false";
+    json += ",\"filename\":\"";
+    json += flashLoggerFilename();
+    json += "\",\"bytes_written\":";
+    json += String(flashLoggerBytesWritten());
+    json += ",\"samples_written\":";
+    json += String(flashLoggerSampleCount());
+    json += ",\"flash_free\":";
+    json += String(flashLoggerFlashFree());
+    json += ",\"flash_total\":";
+    json += String(flashLoggerFlashTotal());
+    json += ",\"file_count\":";
+    json += String(flashLoggerFileCount());
+    json += "}";
+    request->send(200, "application/json", json);
 }
 
 // ===== Public API =====
 
 void webServerInit() {
-    // Initialize LittleFS (format on first use)
-    if (!LittleFS.begin(true)) {
-        Serial.println("[FS] LittleFS mount failed!");
-        return;
-    }
-    Serial.println("[FS] LittleFS mounted");
+    // Note: LittleFS must already be mounted by flashLoggerInit()
 
     // WebSocket handler
     ws.onEvent(onWsEvent);
@@ -90,6 +185,13 @@ void webServerInit() {
 
     // Serve static files from LittleFS
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+
+    // Survey API routes (must be registered BEFORE captive portal catch-all)
+    server.on("/api/surveys", HTTP_GET, handleListSurveys);
+    // For /api/survey/*, we use onRequestBody isn't needed — just match the prefix
+    server.on("^\\/api\\/survey\\/(.+)$", HTTP_GET, handleDownloadSurvey);
+    server.on("^\\/api\\/survey\\/(.+)$", HTTP_DELETE, handleDeleteSurvey);
+    server.on("/api/status", HTTP_GET, handleStatus);
 
     // Captive portal: catch-all for unknown hosts
     server.onNotFound(handleCaptivePortal);
@@ -109,8 +211,6 @@ void webServerInit() {
 }
 
 // Send only to clients that aren't backed up.
-// Prevents "Too many messages queued" errors when a client disconnects
-// ungracefully and the TCP buffer fills before cleanup reaps the client.
 static void wsSendToHealthyClients(uint8_t *buf, size_t len) {
     for (auto *client : ws.getClients()) {
         if (client->status() == WS_CONNECTED && client->canSend()) {
@@ -122,9 +222,8 @@ static void wsSendToHealthyClients(uint8_t *buf, size_t len) {
 void webServerSendSamples(const imu_sample_t *samples, uint8_t count) {
     if (count == 0 || ws.count() == 0) return;
 
-    // Serialize field-by-field: 18 bytes per sample on the wire (no struct padding)
     size_t frameSize = 2 + count * WS_SAMPLE_WIRE_SIZE;
-    uint8_t buf[2 + WS_SAMPLE_BATCH_SIZE * WS_SAMPLE_WIRE_SIZE];  // max 182 bytes
+    uint8_t buf[2 + WS_SAMPLE_BATCH_SIZE * WS_SAMPLE_WIRE_SIZE];
 
     buf[0] = WS_FRAME_RAW_SAMPLES;
     buf[1] = count;
@@ -133,7 +232,6 @@ void webServerSendSamples(const imu_sample_t *samples, uint8_t count) {
         size_t off = 2 + i * WS_SAMPLE_WIRE_SIZE;
         const imu_sample_t *s = &samples[i];
 
-        // Little-endian (native on ESP32) — copy field by field
         memcpy(&buf[off + 0],  &s->timestamp_ms, 4);
         memcpy(&buf[off + 4],  &s->accel_x, 2);
         memcpy(&buf[off + 6],  &s->accel_y, 2);
@@ -150,12 +248,30 @@ void webServerSendSamples(const imu_sample_t *samples, uint8_t count) {
 void webServerSendSummary(const summary_1s_t *summary) {
     if (ws.count() == 0) return;
 
-    // Frame type + all summary fields serialized in order
     uint8_t buf[1 + sizeof(summary_1s_t)];
     buf[0] = WS_FRAME_SUMMARY;
     memcpy(&buf[1], summary, sizeof(summary_1s_t));
 
     wsSendToHealthyClients(buf, sizeof(buf));
+}
+
+void webServerSendRecStatus(bool recording, const char *filename,
+                            uint32_t bytes, uint32_t samples) {
+    if (ws.count() == 0) return;
+
+    uint8_t fnLen = filename ? strlen(filename) : 0;
+    // Frame: [type:1][recording:1][fnLen:1][filename:N][bytes:4][samples:4]
+    size_t frameSize = 3 + fnLen + 8;
+    uint8_t buf[64];  // plenty for any filename
+
+    buf[0] = WS_FRAME_REC_STATUS;
+    buf[1] = recording ? 1 : 0;
+    buf[2] = fnLen;
+    if (fnLen > 0) memcpy(&buf[3], filename, fnLen);
+    memcpy(&buf[3 + fnLen], &bytes, 4);
+    memcpy(&buf[3 + fnLen + 4], &samples, 4);
+
+    wsSendToHealthyClients(buf, frameSize);
 }
 
 uint8_t webServerClientCount() {
@@ -164,4 +280,12 @@ uint8_t webServerClientCount() {
 
 void webServerCleanup() {
     ws.cleanupClients();
+}
+
+int8_t webServerGetRecordingRequest() {
+    return recordingRequest;
+}
+
+void webServerClearRecordingRequest() {
+    recordingRequest = 0;
 }

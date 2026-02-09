@@ -61,16 +61,24 @@ void displayWiFiInfo(const char *ssid, const char *ip) {
 
 void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
                    uint32_t droppedSamples, float samplesPerSec,
-                   uint8_t wifiClients) {
+                   uint8_t wifiClients, bool recording,
+                   uint32_t recElapsedSec) {
     char line[28];  // 128px / 5px per char = 25 chars + margin
 
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_5x7_tf);
 
     // === YELLOW ZONE (rows 0-15): Status line ===
-    snprintf(line, sizeof(line), "%.0fHz %luS W:%u",
-             samplesPerSec, (unsigned long)totalSamples,
-             wifiClients);
+    if (recording) {
+        uint32_t m = recElapsedSec / 60;
+        uint32_t s = recElapsedSec % 60;
+        snprintf(line, sizeof(line), "REC %lu:%02lu W:%u",
+                 (unsigned long)m, (unsigned long)s, wifiClients);
+    } else {
+        snprintf(line, sizeof(line), "%.0fHz %luS W:%u",
+                 samplesPerSec, (unsigned long)totalSamples,
+                 wifiClients);
+    }
     u8g2.drawStr(0, 7, line);
 
     // === BLUE ZONE (rows 16-63): Data ===

@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // ===== VERSION INFORMATION =====
-#define FIRMWARE_VERSION_BASE "0.2.0"
+#define FIRMWARE_VERSION_BASE "0.3.0"
 
 #ifndef BUILD_GIT_HASH
 #define BUILD_GIT_HASH "dev"
@@ -65,6 +65,7 @@
 // WebSocket frame types (server -> client)
 #define WS_FRAME_RAW_SAMPLES    0x01
 #define WS_FRAME_SUMMARY        0x02
+#define WS_FRAME_REC_STATUS     0x03    // Recording state notification
 
 // WebSocket command types (client -> server)
 #define WS_CMD_START_RECORDING  0x10
@@ -114,6 +115,27 @@ struct summary_1s_t {
     float temperature;
     uint32_t sample_count;
     float sample_rate;
+};
+
+// ===== FLASH LOGGING =====
+#define SURVEY_DIR              "/surveys"
+#define SURVEY_HEADER_SIZE      64
+#define SURVEY_SAMPLE_SIZE      18      // Same as WS_SAMPLE_WIRE_SIZE (no padding)
+#define SURVEY_MAGIC            "GEOM"
+#define SURVEY_VERSION          1       // 1=IMU only, 2=IMU+INA219 (future)
+#define FLASH_MIN_FREE_BYTES    32768   // Reserve 32KB for web UI + overhead
+
+struct __attribute__((packed)) survey_header_t {
+    char     magic[4];           // "GEOM"
+    uint8_t  version;            // SURVEY_VERSION
+    uint8_t  sample_size;        // SURVEY_SAMPLE_SIZE (18)
+    uint16_t sample_rate_hz;     // 100
+    uint8_t  accel_range_g;      // 2 (±2g)
+    uint8_t  gyro_range_dps;     // 250 (stored as uint8_t, 250 fits)
+    uint8_t  reserved1[2];
+    uint32_t start_time_ms;      // millis() at recording start
+    char     car_id[16];         // "GeometryCar\0..."
+    uint8_t  reserved2[32];      // Pad to 64 bytes total
 };
 
 #endif // CONFIG_H

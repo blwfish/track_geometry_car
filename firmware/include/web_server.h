@@ -3,7 +3,8 @@
 
 #include "config.h"
 
-// Initialize AsyncWebServer, WebSocket, and LittleFS.
+// Initialize AsyncWebServer, WebSocket, and HTTP API routes.
+// LittleFS must already be mounted (by flashLoggerInit()).
 // Must be called after wifiInit().
 void webServerInit();
 
@@ -14,10 +15,21 @@ void webServerSendSamples(const imu_sample_t *samples, uint8_t count);
 // Broadcast a 1-second summary to connected WebSocket clients.
 void webServerSendSummary(const summary_1s_t *summary);
 
+// Broadcast recording status change to connected WebSocket clients.
+// Frame type 0x03: [0x03][recording:u8][filename_len:u8][filename][bytes:u32][samples:u32]
+void webServerSendRecStatus(bool recording, const char *filename,
+                            uint32_t bytes, uint32_t samples);
+
 // Get the number of connected WebSocket clients.
 uint8_t webServerClientCount();
 
 // Clean up disconnected WebSocket clients. Call every ~2 seconds.
 void webServerCleanup();
+
+// Recording request flag: set by WebSocket command handler (async context),
+// polled by main loop (synchronous context).
+// Returns: 1 = start requested, -1 = stop requested, 0 = no request
+int8_t webServerGetRecordingRequest();
+void webServerClearRecordingRequest();
 
 #endif // WEB_SERVER_H

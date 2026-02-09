@@ -8,6 +8,7 @@
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "summary.h"
+#include "flash_logger.h"
 
 // ===== Timer counter =====
 // Incremented by hardware timer callback, decremented by main loop.
@@ -34,6 +35,9 @@ static summary_1s_t latestSummary;
 // ===== WiFi state =====
 static bool wifiReady = false;
 
+// ===== Recording state =====
+static unsigned long recordingStartTime = 0;
+
 // ===== Non-blocking task timers =====
 static unsigned long lastOledUpdate    = 0;
 static unsigned long lastSerialOutput  = 0;
@@ -46,6 +50,43 @@ static esp_timer_handle_t imuTimer = nullptr;
 
 static void IRAM_ATTR imuTimerCallback(void *arg) {
     imuSamplesPending++;
+}
+
+// ===== Recording helpers =====
+
+static void handleRecordingRequest() {
+    int8_t req = webServerGetRecordingRequest();
+    if (req == 0) return;
+    webServerClearRecordingRequest();
+
+    if (req == 1 && !flashLoggerIsRecording()) {
+        // Start recording
+        if (flashLoggerStart()) {
+            recordingStartTime = millis();
+            webServerSendRecStatus(true, flashLoggerFilename(), 0, 0);
+            Serial.printf("[REC] Started: %s\n", flashLoggerFilename());
+        } else {
+            Serial.println("[REC] Failed to start recording");
+            webServerSendRecStatus(false, "", 0, 0);
+        }
+    } else if (req == -1 && flashLoggerIsRecording()) {
+        // Stop recording
+        flashLoggerStop();
+        webServerSendRecStatus(false, flashLoggerFilename(),
+                               flashLoggerBytesWritten(), flashLoggerSampleCount());
+        Serial.printf("[REC] Stopped: %lu samples, %lu bytes\n",
+                      (unsigned long)flashLoggerSampleCount(),
+                      (unsigned long)flashLoggerBytesWritten());
+    }
+}
+
+static void checkFlashFull() {
+    if (flashLoggerIsRecording() && flashLoggerFlashFull()) {
+        Serial.println("[REC] Flash full — auto-stopping");
+        flashLoggerStop();
+        webServerSendRecStatus(false, flashLoggerFilename(),
+                               flashLoggerBytesWritten(), flashLoggerSampleCount());
+    }
 }
 
 // ===== Setup =====
@@ -68,7 +109,7 @@ void setup() {
         Serial.println("[WARN] OLED init failed - continuing without display");
     } else {
         displayStartup(FIRMWARE_VERSION);
-        delay(1500);  // Show startup screen (acceptable in setup only)
+        delay(1500);
     }
 
     // Initialize MPU-6050
@@ -76,19 +117,23 @@ void setup() {
     if (!imuInit()) {
         Serial.println("[FATAL] MPU-6050 init failed!");
         displayError("MPU-6050 NOT FOUND");
-        while (true) { delay(1000); }  // Halt - can't proceed without IMU
+        while (true) { delay(1000); }
     }
 
-    // Initialize WiFi AP (before starting timer)
+    // Initialize flash logger (mounts LittleFS — must be before webServerInit)
+    if (!flashLoggerInit()) {
+        Serial.println("[WARN] Flash logger init failed - continuing without logging");
+    }
+
+    // Initialize WiFi AP
     if (wifiInit()) {
         wifiReady = true;
         webServerInit();
 
-        // Show WiFi info on OLED
         char ipBuf[16];
         wifiGetIP(ipBuf, sizeof(ipBuf));
         displayWiFiInfo(WIFI_AP_SSID, ipBuf);
-        delay(2500);  // Show WiFi info screen
+        delay(2500);
     } else {
         Serial.println("[WARN] WiFi init failed - continuing without WiFi");
     }
@@ -103,7 +148,6 @@ void setup() {
     ESP_ERROR_CHECK(esp_timer_create(&timerArgs, &imuTimer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(imuTimer, IMU_SAMPLE_INTERVAL_US));
 
-    // Print CSV header for serial output
     Serial.println("\ntimestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c");
 
     lastStatsReport = millis();
@@ -119,8 +163,12 @@ void loop() {
         wifiProcessDNS();
     }
 
+    // --- Check recording requests from WebSocket ---
+    if (wifiReady) {
+        handleRecordingRequest();
+    }
+
     // --- 100Hz IMU sampling (counter-driven) ---
-    // Drain all pending samples — catches up after OLED writes hold the bus
     while (imuSamplesPending > 0) {
         imuSamplesPending--;
 
@@ -138,14 +186,21 @@ void loop() {
         }
     }
 
-    // --- 10Hz WebSocket sample broadcast ---
+    // --- 10Hz WebSocket sample broadcast + flash logging ---
     if (now - lastWsSend >= WS_SEND_INTERVAL_MS) {
         lastWsSend = now;
 
         if (wifiReady && webServerClientCount() > 0 && wsSampleCount > 0) {
             webServerSendSamples(wsSampleBatch, wsSampleCount);
         }
-        wsSampleCount = 0;  // Reset regardless
+
+        // Write same batch to flash if recording
+        if (flashLoggerIsRecording() && wsSampleCount > 0) {
+            flashLoggerWriteSamples(wsSampleBatch, wsSampleCount);
+            checkFlashFull();
+        }
+
+        wsSampleCount = 0;
     }
 
     // --- 10Hz Serial CSV output ---
@@ -184,8 +239,10 @@ void loop() {
         const imu_sample_t *latest = ringBufferGetRecent(0);
         if (latest) {
             uint8_t clients = wifiReady ? wifiClientCount() : 0;
+            bool rec = flashLoggerIsRecording();
+            uint32_t recElapsed = rec ? (now - recordingStartTime) / 1000 : 0;
             displayUpdate(latest, totalSamples, droppedSamples,
-                          measuredSamplesPerSec, clients);
+                          measuredSamplesPerSec, clients, rec, recElapsed);
         }
     }
 
@@ -201,12 +258,20 @@ void loop() {
         float elapsed = (now - lastStatsReport) / 1000.0f;
         measuredSamplesPerSec = samplesThisPeriod / elapsed;
 
-        Serial.printf("# Stats: %.1f Hz (%lu samples, %lu dropped, %lu total, %lu free heap, %u WS clients)\n",
+        Serial.printf("# Stats: %.1f Hz (%lu samples, %lu dropped, %lu total, %lu free heap",
             measuredSamplesPerSec,
             (unsigned long)samplesThisPeriod,
             (unsigned long)droppedSamples,
             (unsigned long)totalSamples,
-            (unsigned long)ESP.getFreeHeap(),
+            (unsigned long)ESP.getFreeHeap());
+
+        if (flashLoggerIsRecording()) {
+            Serial.printf(", REC %lu samples, %lu KB flash free",
+                (unsigned long)flashLoggerSampleCount(),
+                (unsigned long)(flashLoggerFlashFree() / 1024));
+        }
+
+        Serial.printf(", %u WS clients)\n",
             wifiReady ? webServerClientCount() : 0);
 
         sampleCountAtLastReport = totalSamples;

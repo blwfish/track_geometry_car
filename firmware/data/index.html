@@ -116,18 +116,81 @@ button {
 #btn-stop {
     background: #991b1b;
     color: #fff;
-    display: none;
 }
 #btn-save {
     background: #1e40af;
     color: #fff;
-    display: none;
 }
 button:disabled { opacity: 0.4; cursor: default; }
 #rec-info {
     font-size: 12px;
     color: #888;
 }
+#file-manager {
+    padding: 8px 12px;
+}
+#fm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    background: #16213e;
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+#fm-header h3 {
+    font-size: 12px;
+    font-weight: normal;
+    color: #aaa;
+    text-transform: uppercase;
+}
+#fm-toggle { color: #666; font-size: 12px; }
+#fm-body {
+    background: #121a30;
+    border-radius: 0 0 4px 4px;
+    padding: 6px 8px;
+    display: none;
+}
+#fm-body.open { display: block; }
+#flash-bar {
+    height: 6px;
+    background: #0a0f1e;
+    border-radius: 3px;
+    margin-bottom: 6px;
+    overflow: hidden;
+}
+#flash-fill {
+    height: 100%;
+    background: #1e40af;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+#flash-info {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 6px;
+}
+.survey-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-top: 1px solid #1a2a4a;
+    font-size: 12px;
+}
+.survey-item:first-child { border-top: none; }
+.survey-name { color: #aaa; }
+.survey-meta { color: #666; margin-left: 8px; }
+.survey-actions { display: flex; gap: 4px; }
+.survey-actions button {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 3px;
+}
+.btn-dl { background: #1e3a5f; color: #8cb4e0; }
+.btn-del { background: #3f1515; color: #e08c8c; }
 @media (min-width: 601px) {
     canvas { height: 400px; min-height: 300px; }
     #readouts { grid-template-columns: 1fr 1fr 1fr; }
@@ -184,9 +247,21 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 <div id="recording-bar">
     <button id="btn-start" onclick="startRec()">Start Recording</button>
-    <button id="btn-stop" onclick="stopRec()">Stop Recording</button>
-    <button id="btn-save" onclick="saveRec()">Save Survey</button>
+    <button id="btn-stop" style="display:none" onclick="stopRec()">Stop Recording</button>
+    <button id="btn-save" style="display:none" onclick="saveRec()">Save Survey</button>
     <span id="rec-info"></span>
+</div>
+
+<div id="file-manager">
+    <div id="fm-header" onclick="toggleFileManager()">
+        <h3>Saved Surveys</h3>
+        <span id="fm-toggle">&#9660;</span>
+    </div>
+    <div id="fm-body">
+        <div id="flash-bar"><div id="flash-fill" style="width:0%"></div></div>
+        <div id="flash-info">Flash: --</div>
+        <div id="survey-list"></div>
+    </div>
 </div>
 
 <script>
@@ -232,6 +307,9 @@ function wsConnect() {
         document.getElementById('conn-status').innerHTML =
             '<span class="status-dot dot-green"></span>Connected';
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        // Fetch flash status on connect
+        fetchStatus();
+        fetchSurveys();
     };
 
     ws.onclose = () => {
@@ -269,6 +347,9 @@ function parseFrame(buf) {
     } else if (type === 0x02) {
         // 1-second summary
         parseSummary(v);
+    } else if (type === 0x03) {
+        // Recording status notification from ESP32
+        parseRecStatus(v);
     }
 }
 
@@ -479,7 +560,7 @@ function startRec() {
     recSamples = [];
     recStart = Date.now();
     document.getElementById('btn-start').style.display = 'none';
-    document.getElementById('btn-stop').style.display = '';
+    document.getElementById('btn-stop').style.display = 'inline-block';
     document.getElementById('btn-save').style.display = 'none';
     document.getElementById('rec-status').innerHTML =
         '<span class="status-dot dot-rec"></span><span id="rec-time">0:00</span>';
@@ -498,9 +579,9 @@ function startRec() {
 function stopRec() {
     recording = false;
     clearInterval(recTimer);
-    document.getElementById('btn-start').style.display = '';
+    document.getElementById('btn-start').style.display = 'inline-block';
     document.getElementById('btn-stop').style.display = 'none';
-    document.getElementById('btn-save').style.display = '';
+    document.getElementById('btn-save').style.display = 'inline-block';
     document.getElementById('rec-status').innerHTML = '';
 
     // Send stop command to ESP32
@@ -509,9 +590,15 @@ function stopRec() {
     const dur = ((Date.now() - recStart) / 1000).toFixed(1);
     document.getElementById('rec-info').textContent =
         recSamples.length.toLocaleString() + ' samples, ' + dur + 's';
+
+    // Refresh file list after recording stops (flash file was saved)
+    setTimeout(() => { fetchSurveys(); fetchStatus(); }, 500);
 }
 
 function saveRec() {
+    // Browser-side JSON save — works for long recordings that exceed flash capacity.
+    // Captive portal webviews don't support Blob URLs, so we use a data URI
+    // with octet-stream MIME type which triggers a download/share prompt.
     const survey = {
         version: 1,
         car: 'GeometryCar',
@@ -522,15 +609,115 @@ function saveRec() {
         gyro_range_dps: 250,
         samples: recSamples
     };
-    const blob = new Blob([JSON.stringify(survey)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    const json = JSON.stringify(survey);
+    const dataUri = 'data:application/octet-stream;charset=utf-8,' + encodeURIComponent(json);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = dataUri;
     a.download = 'survey_' + new Date().toISOString().replace(/[:.]/g, '') + '.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+}
+
+// ===== Flash Recording Status (WS 0x03) =====
+function parseRecStatus(v) {
+    // Frame: [type:1][recording:1][fnLen:1][filename:N][bytes:4][samples:4]
+    const isRec = v.getUint8(1) === 1;
+    const fnLen = v.getUint8(2);
+    let filename = '';
+    for (let i = 0; i < fnLen; i++) filename += String.fromCharCode(v.getUint8(3 + i));
+    const bytes = v.getUint32(3 + fnLen, true);
+    const samples = v.getUint32(3 + fnLen + 4, true);
+
+    // Update flash recording indicator in status bar
+    const recEl = document.getElementById('rec-status');
+    if (isRec) {
+        recEl.innerHTML = '<span class="status-dot dot-rec"></span>Flash REC';
+    } else {
+        recEl.innerHTML = '';
+        // Recording stopped — refresh file list
+        fetchSurveys();
+        fetchStatus();
+    }
+}
+
+// ===== File Manager =====
+let fmOpen = false;
+
+function toggleFileManager() {
+    fmOpen = !fmOpen;
+    document.getElementById('fm-body').className = fmOpen ? 'open' : '';
+    document.getElementById('fm-toggle').innerHTML = fmOpen ? '&#9650;' : '&#9660;';
+    if (fmOpen) {
+        fetchSurveys();
+        fetchStatus();
+    }
+}
+
+function fetchStatus() {
+    fetch('/api/status')
+        .then(r => r.json())
+        .then(st => {
+            const used = st.flash_total - st.flash_free;
+            const pct = st.flash_total > 0 ? (used / st.flash_total * 100) : 0;
+            document.getElementById('flash-fill').style.width = pct.toFixed(1) + '%';
+            const freeKB = (st.flash_free / 1024).toFixed(0);
+            const totalKB = (st.flash_total / 1024).toFixed(0);
+            document.getElementById('flash-info').textContent =
+                'Flash: ' + freeKB + ' KB free / ' + totalKB + ' KB total (' +
+                st.file_count + ' file' + (st.file_count !== 1 ? 's' : '') + ')';
+        })
+        .catch(() => {});
+}
+
+function fetchSurveys() {
+    fetch('/api/surveys')
+        .then(r => r.json())
+        .then(surveys => {
+            const list = document.getElementById('survey-list');
+            if (surveys.length === 0) {
+                list.innerHTML = '<div style="color:#555;font-size:11px;padding:4px 0">No saved surveys</div>';
+                return;
+            }
+            list.innerHTML = '';
+            surveys.forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'survey-item';
+                const sizeKB = (s.size / 1024).toFixed(1);
+                const dur = s.duration_sec.toFixed(0);
+                div.innerHTML =
+                    '<span><span class="survey-name">' + s.name + '</span>' +
+                    '<span class="survey-meta">' + sizeKB + ' KB, ' + dur + 's, ' +
+                    s.samples + ' smp</span></span>' +
+                    '<span class="survey-actions">' +
+                    '<button class="btn-dl" onclick="dlSurvey(\'' + s.name + '\')">DL</button>' +
+                    '<button class="btn-del" onclick="delSurvey(\'' + s.name + '\')">Del</button>' +
+                    '</span>';
+                list.appendChild(div);
+            });
+        })
+        .catch(() => {});
+}
+
+function dlSurvey(name) {
+    const a = document.createElement('a');
+    a.href = '/api/survey/' + name;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function delSurvey(name) {
+    if (!confirm('Delete ' + name + '?')) return;
+    fetch('/api/survey/' + name, { method: 'DELETE' })
+        .then(r => {
+            if (r.ok) {
+                fetchSurveys();
+                fetchStatus();
+            }
+        })
+        .catch(() => {});
 }
 
 // ===== Init =====
