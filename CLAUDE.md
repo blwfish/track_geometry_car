@@ -120,6 +120,7 @@ captive portal auto-opens dashboard. If not, navigate to http://192.168.4.1.
 - [ ] Phase 5: Calibration & NVS storage
 - [x] Phase 6: Analysis script (Python) — `analysis/analyze_survey.py`
 - [ ] Phase 7: Validation & refinement
+- [ ] Future: Clearance detector (pivoting arm + hall sensor)
 - [ ] Future: Dual IMU (MPU-6050 x2, 0x68 + 0x69) for differential geometry
 - [ ] Future: ESP32-CAM wheelset camera (standalone, MJPEG stream)
 - [ ] Future: 3D printed PRR F43 depressed-center flat car body

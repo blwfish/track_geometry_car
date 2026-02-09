@@ -50,6 +50,86 @@ Items here are aspirational — not all will be implemented.
 - **Future**: Frame-by-frame correlation with IMU timestamps in Phase 6
   analysis script. "At this IMU spike, here's what the wheel was doing."
 
+### Clearance Detector (Pivoting Arm)
+- **Inspiration**: B&O CE15 clearance car at B&O Railroad Museum — a large
+  spoked wheel/arm assembly on the roof that detects overhead obstructions
+  by physical contact during a clearance survey run
+- **Purpose**: Detect clearance infringements — both overhead (low bridges,
+  tunnel portals, signal bridges, scenery) and underbody (raised spikes,
+  track debris, roadbed intrusions that snag Kadee glad hands, brake rigging,
+  uncoupling pins, or other underbody detail parts)
+- **Overhead concept**: A thin vertical arm (brass wire or 0.015" piano wire)
+  mounted on a pivot at the car roof, extending upward to the HO loading gauge
+  limit (~22mm above rail head for NMRA S-7). Spring-return or gravity
+  self-centering. When the arm contacts an obstruction, it deflects the pivot.
+- **Underbody concept**: A lightweight wire skid or feeler hanging below the
+  car between the trucks, set to the minimum underbody clearance height
+  (just above railhead — matching the lowest hanging detail parts like Kadee
+  glad hands at ~3mm above rail). Pivots upward on contact with an obstruction.
+  Same hall sensor detection as overhead arms.
+  - Simpler alternative: a thin spring-steel strip running longitudinally
+    between the trucks at glad-hand height. Any upward deflection closes a
+    contact or triggers a hall sensor. Acts like a continuous feeler rather
+    than a point detector.
+  - Can also detect ballast/debris piled too high between the rails (common
+    after ballast work on the prototype, and on model railroads after
+    scenicking)
+- **Detection options** (in order of preference):
+  1. **Hall effect sensor + magnet**: Tiny A3144 or SS49E hall sensor at the
+     pivot base, small neodymium magnet on the arm. Deflection moves the magnet
+     away from the sensor → digital or analog signal. No mechanical switch to
+     wear out. ~$0.50.
+  2. **Microswitch**: Omron D2F or similar subminiature lever switch at the
+     pivot. Reliable, but has a minimum actuation force that may be too high
+     for delicate scenery.
+  3. **Optical interrupter**: Slotted photosensor at pivot, flag on arm.
+     Clean digital signal, no contact wear, but bulkier.
+- **Arm design considerations**:
+  - Flexible enough to not damage scenery on contact
+  - Stiff enough to return to rest position reliably
+  - Overhead: multiple arms at different heights for an envelope profile
+    (e.g., arms at 20mm, 21mm, 22mm = coarse clearance binning)
+  - Overhead: or a single adjustable-height arm, run multiple passes
+  - Underbody: single feeler at glad-hand height is sufficient — anything
+    that snags a glad hand is a problem regardless of exact height
+  - Lateral arms possible too (horizontal wires at gauge + clearance width)
+    for side clearance of platforms, tunnel walls, signal masts
+  - Full envelope: overhead + lateral + underbody = complete loading gauge
+    survey in one pass
+- **Firmware**:
+  - One GPIO pin per arm (digital input, interrupt on FALLING edge)
+  - Don't need to sample at 100Hz in `imu_sample_t` — contact events are
+    sparse, so log them as timestamped events in a separate section of the
+    survey file (event type + timestamp + which arm)
+  - Or: add a single `uint8_t clearance_flags` bitmask to `imu_sample_t`
+    (1 bit per arm, up to 8 arms) — costs only 1 extra byte per sample,
+    simpler than a separate event log, and analysis script can extract edges
+  - Debounce in firmware: 10-20ms ignore window after trigger (arm bounces)
+- **Survey format**: If using the bitmask approach, bump `SURVEY_SAMPLE_SIZE`
+  by 1 byte and add `num_clearance_arms` + `arm_height_mm[]` to the header's
+  reserved bytes. If using event log, append events after the sample data
+  with a separate index.
+- **Analysis script**:
+  - Plot clearance events on the position strip chart (vertical red lines)
+  - Cross-reference with vertical curve and grade data — overhead clearance
+    is tighter at sag vertical curves (car rides higher), underbody clearance
+    is tighter at crest vertical curves (car droops between trucks)
+  - Report: list of clearance infringements with position, which arm(s) hit,
+    estimated clearance range based on which arms triggered and which didn't
+  - Compare runs: did fixing that bridge abutment actually improve clearance?
+- **Mounting on PRR F43**:
+  - Overhead: arm assembly on the depressed well section (lowest point of car)
+    gives the most conservative measurement. Looks prototypical as MOW
+    clearance survey equipment. 3D print a small housing/bearing block that
+    press-fits onto the car body.
+  - Underbody: feeler strip mounts to underframe between trucks, inside the
+    rail gauge. The F43's depressed center well has generous vertical space
+    between the floor and railhead — feeler hangs from the well floor.
+  - Both look appropriate on a MoW clearance/geometry car.
+- **Calibration**: Set arm height with a gauge block on a known-good section
+  of track. Mark the arm at the NMRA loading gauge height. No electronic
+  calibration needed — it's purely mechanical.
+
 ### INA219 Power Monitor (Phase 3)
 - **Status**: Hardware arriving
 - **Purpose**: Track power quality — voltage drops, dirty track detection
@@ -118,6 +198,68 @@ Items here are aspirational — not all will be implemented.
 - Overlay multiple runs for before/after track work comparison
 - Heat map: color-coded track quality along the layout
 - Export to CSV for external tools
+
+### Quantitative Change Detection (Run-to-Run Differencing)
+- **Purpose**: Detect and quantify how track geometry changes over time —
+  thermal expansion, humidity warping, ballast settlement, benchwork movement.
+  Real railroads trend repeated geometry measurements to predict where
+  maintenance is needed before it becomes a problem. Same concept at HO scale.
+- **Spatial alignment** — the key problem:
+  - Two runs of the same track won't have matching timestamps or positions
+    (speed varies, start point differs). Must align spatially, not temporally.
+  - **Landmark cross-correlation**: Rail joints, turnout frogs, and other sharp
+    IMU signatures are fingerprints. Detect these in both runs, match them,
+    then warp/stretch the position axis between matched landmarks to align.
+    This is analogous to surveying "chain adjustment."
+  - **Dual IMU advantage**: Speed-from-bump-correlation gives true velocity
+    at every sample, so position estimates are much more accurate. Less
+    warping correction needed, and the correction that remains is more reliable.
+  - **Fiducial markers** (optional): Small magnets glued under the track at
+    known positions, detected by a hall sensor on the car. Gives absolute
+    position fixes. Cheap, invisible, and eliminates cumulative drift entirely.
+    Could share the clearance detector's hall sensor with a second channel.
+- **Differenced channels** — once aligned, subtract run B from run A:
+  - **Lateral shift**: Change in mean yaw rate through a curve → Δradius →
+    track moved laterally. Report in mm of lateral displacement.
+  - **Vertical settlement**: Change in integrated pitch (grade profile) →
+    track rose or sank. A dip that deepens 0.5mm between runs = ballast
+    settling or benchwork sag.
+  - **Twist development**: Change in roll rate → one rail rising relative to
+    the other (cross-level change). Early indicator of ballast problems or
+    roadbed moisture.
+  - **Curve migration**: If a curve's centroid position shifts between runs,
+    the whole curve slid along the roadbed (rail creep).
+  - **Joint opening**: If a rail joint's IMU spike widens or shifts position,
+    the rail gap is changing (thermal expansion/contraction).
+- **Trend analysis** (3+ runs over time):
+  - Per-section trend: "this curve has been tightening 0.1"/month since October"
+  - Rate-of-change alerts: flag sections where degradation is accelerating
+  - Seasonal patterns: correlate with temperature/humidity if logged
+  - Maintenance effectiveness: quantify improvement from specific track work
+- **Analysis script implementation** (`--diff` mode):
+  - Input: two or more survey files of the same track, in chronological order
+  - Step 1: Detect landmarks (joints, frogs, sharp events) in each run
+  - Step 2: Match landmarks between runs using cross-correlation windows
+  - Step 3: Warp position axes to align matched landmarks (piecewise linear)
+  - Step 4: Interpolate both runs onto a common position grid
+  - Step 5: Compute per-channel differences
+  - Step 6: Report sections ranked by magnitude of change, type of change
+    (lateral/vertical/twist), and direction of trend
+  - Output: change report (text + JSON), difference strip chart, trend plots
+    if >2 runs provided
+- **Distinct from `--compare`**: The existing `--compare` flag overlays two
+  runs visually on the same plots. `--diff` does quantitative subtraction
+  with spatial alignment — it answers "what changed and by how much" rather
+  than "here are both runs side by side."
+- **Practical use cases**:
+  - Seasonal survey: run in January (cold/dry) and July (hot/humid), diff
+    shows where the layout moves with the seasons
+  - Post-maintenance verification: survey before and after shimming/releveling,
+    diff confirms the fix and quantifies improvement
+  - Long-term monitoring: quarterly surveys build a trend database, identify
+    problem areas before they cause derailments
+  - New construction settling: frequent surveys of newly built sections to
+    track initial settlement curve
 
 ### Dashboard Enhancements
 - Computed channels (twist, curvature) when dual IMU is present
