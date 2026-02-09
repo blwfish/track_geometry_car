@@ -11,6 +11,7 @@ firmware/           PlatformIO project (ESP32, Arduino framework)
   src/              Implementation (.cpp files)
   data/             LittleFS web UI (index.html)
   test/             Unit tests (native + embedded)
+analysis/           Python post-processing (analyze_survey.py)
 docs/               Specifications and architecture documentation
 ```
 
@@ -36,6 +37,30 @@ All PlatformIO commands run from `firmware/`:
 
 # Run on-target tests (requires ESP32 connected)
 ~/.platformio/penv/bin/pio test -e esp32dev
+```
+
+## Analysis Commands
+
+Run from `analysis/` using the venv:
+
+```bash
+# Set up venv (first time only)
+python3 -m venv .venv && .venv/bin/pip install numpy matplotlib
+
+# Analyze a binary survey file from flash
+.venv/bin/python analyze_survey.py <survey.bin>
+
+# Analyze a browser-captured JSON file
+.venv/bin/python analyze_survey.py <survey.json>
+
+# Custom speed/thresholds
+.venv/bin/python analyze_survey.py survey.bin --speed 15 --section-len 500
+
+# Before/after comparison
+.venv/bin/python analyze_survey.py after.bin --compare before.bin
+
+# Generate synthetic test data
+.venv/bin/python generate_test_data.py
 ```
 
 ## Hardware
@@ -93,7 +118,7 @@ captive portal auto-opens dashboard. If not, navigate to http://192.168.4.1.
 - [x] Phase 4: Flash logging & download (LittleFS, ~14 min capacity)
 - [ ] Phase 4b: Micro-SD card logging (SdFat, FAT32, format-on-first-use)
 - [ ] Phase 5: Calibration & NVS storage
-- [ ] Phase 6: Analysis script (Python)
+- [x] Phase 6: Analysis script (Python) — `analysis/analyze_survey.py`
 - [ ] Phase 7: Validation & refinement
 - [ ] Future: Dual IMU (MPU-6050 x2, 0x68 + 0x69) for differential geometry
 - [ ] Future: ESP32-CAM wheelset camera (standalone, MJPEG stream)
