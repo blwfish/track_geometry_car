@@ -191,6 +191,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .btn-dl { background: #1e3a5f; color: #8cb4e0; }
 .btn-del { background: #3f1515; color: #e08c8c; }
+#geom-group { border: 1px solid #1e3a5f; }
+#speed-input:focus { outline: 1px solid #0f3460; }
 @media (min-width: 601px) {
     canvas { height: 400px; min-height: 300px; }
     #readouts { grid-template-columns: 1fr 1fr 1fr; }
@@ -243,6 +245,20 @@ button:disabled { opacity: 0.4; cursor: default; }
         <div class="readout-row"><span class="readout-label">Rate</span><span class="readout-val" id="rate-val">-</span></div>
         <div class="readout-row"><span class="readout-label">Samples</span><span class="readout-val" id="count-val">-</span></div>
     </div>
+    <div class="readout-group" id="geom-group">
+        <h3>Geometry</h3>
+        <div class="readout-row"><span class="readout-label">State</span><span class="readout-val" id="geom-state">-</span></div>
+        <div class="readout-row"><span class="readout-label">Radius</span><span class="readout-val" id="geom-radius">-</span></div>
+        <div class="readout-row"><span class="readout-label">Yaw</span><span class="readout-val" id="geom-yaw">-</span></div>
+        <div class="readout-row"><span class="readout-label">SNR</span><span class="readout-val" id="geom-snr">-</span></div>
+        <div class="readout-row"><span class="readout-label">Speed</span><span class="readout-val" id="geom-speed">
+            <input type="number" id="speed-input" value="10" min="1" max="60" step="1"
+                   style="width:36px; background:#0f0f23; color:#e0e0e0; border:1px solid #333;
+                          border-radius:3px; font-family:inherit; font-size:12px; text-align:right;
+                          padding:1px 3px;">
+            <span style="font-size:11px; color:#888;">mph</span>
+        </span></div>
+    </div>
 </div>
 
 <div id="recording-bar">
@@ -272,6 +288,8 @@ const TEMP_SCALE = 340.0;
 const TEMP_OFFSET = 36.53;
 const CHART_SECONDS = 30;
 const MAX_POINTS = CHART_SECONDS * 100;
+const GYRO_NOISE_DPS = 0.05;  // MPU-6050 noise floor
+const CURVE_THRESHOLD_DPS = 0.3;  // Below this = straight
 
 // ===== Trace definitions =====
 const TRACES = [
@@ -371,7 +389,7 @@ function parseSummary(v) {
     const axRms = f(), ayRms = f(), azRms = f();
     const axPk = f(), ayPk = f(), azPk = f();
     const gxRms = f(), gyRms = f(), gzRms = f();
-    f(); f(); f(); // gyro means — skip for now
+    const gxMean = f(), gyMean = f(), gzMean = f();
     const temp = f();
     const count = u();
     const rate = f();
@@ -388,6 +406,71 @@ function parseSummary(v) {
     document.getElementById('temp-val').textContent = temp.toFixed(1) + '°C';
     document.getElementById('count-val').textContent = count.toLocaleString();
     document.getElementById('rate-val').textContent = rate.toFixed(1) + ' Hz';
+
+    // Geometry computation from 1-second mean yaw rate
+    updateGeometry(gzMean, azRms);
+}
+
+function updateGeometry(yawMeanDps, azRms) {
+    const absYaw = Math.abs(yawMeanDps);
+    const snr = absYaw / GYRO_NOISE_DPS;
+    const speedMph = parseFloat(document.getElementById('speed-input').value) || 10;
+    // Convert scale mph to model mm/s (HO = 1:87)
+    const speedMms = speedMph * 447.04 / 87.0;  // mph to mm/s prototype, then /87
+
+    const stateEl = document.getElementById('geom-state');
+    const radiusEl = document.getElementById('geom-radius');
+    const yawEl = document.getElementById('geom-yaw');
+    const snrEl = document.getElementById('geom-snr');
+
+    yawEl.textContent = absYaw.toFixed(2) + ' \u00b0/s';
+    snrEl.textContent = snr.toFixed(0);
+
+    if (absYaw < CURVE_THRESHOLD_DPS) {
+        // Straight track
+        stateEl.textContent = 'Straight';
+        stateEl.style.color = '#4ade80';
+        radiusEl.textContent = '-';
+        radiusEl.style.color = '#e0e0e0';
+        snrEl.style.color = '#888';
+
+        // Ride quality from vertical accel RMS
+        if (azRms < 1.01) {
+            stateEl.textContent = 'Straight \u2022 Smooth';
+        } else if (azRms < 1.03) {
+            stateEl.textContent = 'Straight \u2022 Fair';
+        } else {
+            stateEl.textContent = 'Straight \u2022 Rough';
+            stateEl.style.color = '#fbbf24';
+        }
+    } else {
+        // In a curve
+        const yawRad = absYaw * Math.PI / 180;
+        const radiusMm = speedMms / yawRad;
+        const radiusIn = radiusMm / 25.4;
+        const dir = yawMeanDps > 0 ? 'L' : 'R';
+
+        stateEl.textContent = 'Curve ' + dir;
+        stateEl.style.color = '#60a5fa';
+
+        if (radiusIn < 100) {
+            radiusEl.textContent = radiusIn.toFixed(1) + '"';
+        } else {
+            radiusEl.textContent = radiusIn.toFixed(0) + '"';
+        }
+
+        // Color code SNR: green=good, yellow=marginal, red=noisy
+        if (snr >= 20) {
+            snrEl.style.color = '#4ade80';
+            radiusEl.style.color = '#e0e0e0';
+        } else if (snr >= 10) {
+            snrEl.style.color = '#fbbf24';
+            radiusEl.style.color = '#fbbf24';
+        } else {
+            snrEl.style.color = '#ef4444';
+            radiusEl.style.color = '#ef4444';
+        }
+    }
 }
 
 // ===== Strip Chart =====

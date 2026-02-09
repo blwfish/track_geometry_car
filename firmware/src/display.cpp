@@ -3,6 +3,7 @@
 #include "ring_buffer.h"
 #include <U8g2lib.h>
 #include <Wire.h>
+#include <math.h>
 
 // Full-buffer constructor for SSD1306/SSD1315 128x64 I2C OLED.
 // SSD1315 is register-compatible with SSD1306; U8g2 drives it natively.
@@ -16,6 +17,17 @@ static const uint8_t BLUE_ZONE_TOP      = 16;  // Blue starts at row 16
 static const uint8_t SPARKLINE_Y      = 50;   // Top of sparkline area
 static const uint8_t SPARKLINE_HEIGHT = 14;   // Pixels tall
 static const uint8_t SPARKLINE_WIDTH  = 128;  // Full display width
+
+// Geometry detection thresholds
+static const float CURVE_THRESHOLD_DPS = 0.3f;    // Below this = straight
+static const float GYRO_NOISE_FLOOR_DPS = 0.05f;  // MPU-6050 noise floor (~20Hz DLPF)
+static const float GOOD_SNR = 20.0f;              // SNR threshold for good measurement
+static const float MIN_SNR = 10.0f;               // SNR threshold for marginal measurement
+
+// Assumed survey speed for radius estimation (mm/s).
+// 10 scale mph in HO (1:87) = 58 mm/s model speed.
+// This is a default — the browser dashboard lets the user set actual speed.
+static const float DEFAULT_SPEED_MMS = 58.0f;
 
 bool displayInit() {
     bool ok = u8g2.begin();
@@ -62,7 +74,8 @@ void displayWiFiInfo(const char *ssid, const char *ip) {
 void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
                    uint32_t droppedSamples, float samplesPerSec,
                    uint8_t wifiClients, bool recording,
-                   uint32_t recElapsedSec) {
+                   uint32_t recElapsedSec,
+                   const summary_1s_t *summary) {
     char line[28];  // 128px / 5px per char = 25 chars + margin
 
     u8g2.clearBuffer();
@@ -90,11 +103,54 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     snprintf(line, sizeof(line), "A %+.2f %+.2f %+.2f", ax, ay, az);
     u8g2.drawStr(0, 24, line);
 
-    // Line 3: Gyroscope (deg/s)
-    float gx = imuGyroDPS(latest->gyro_x);
-    float gy = imuGyroDPS(latest->gyro_y);
-    float gz = imuGyroDPS(latest->gyro_z);
-    snprintf(line, sizeof(line), "G %+.1f %+.1f %+.1f", gx, gy, gz);
+    // Line 3: Geometry info (curve/straight + speed recommendation)
+    // Uses 1-second mean yaw rate from summary for stability
+    if (summary != nullptr) {
+        float yawMean = fabsf(summary->gyro_z_mean);  // °/s
+        float snr = yawMean / GYRO_NOISE_FLOOR_DPS;
+
+        if (yawMean < CURVE_THRESHOLD_DPS) {
+            // Straight track — show vibration grade from vertical accel
+            // Subtract 1g gravity, show RMS of the deviation
+            float vertRms = summary->accel_z_rms;
+            // accel_z_rms includes gravity (~1g), deviation is small
+            // A rough ride quality indicator
+            if (vertRms < 1.01f) {
+                snprintf(line, sizeof(line), "Straight  Smooth");
+            } else if (vertRms < 1.03f) {
+                snprintf(line, sizeof(line), "Straight  Fair");
+            } else {
+                snprintf(line, sizeof(line), "Straight  Rough");
+            }
+        } else {
+            // In a curve — compute radius
+            float yawRad = yawMean * (M_PI / 180.0f);  // Convert to rad/s
+            float radiusMm = DEFAULT_SPEED_MMS / yawRad;
+            float radiusIn = radiusMm / 25.4f;
+
+            // Speed recommendation based on SNR
+            const char *spdHint;
+            if (snr >= GOOD_SNR) {
+                spdHint = "OK";
+            } else if (snr >= MIN_SNR) {
+                spdHint = "ok";
+            } else {
+                spdHint = "\x18SPD";  // ↑SPD — up arrow + SPD
+            }
+
+            if (radiusIn < 100) {
+                snprintf(line, sizeof(line), "R:%.0f\" %s", radiusIn, spdHint);
+            } else {
+                snprintf(line, sizeof(line), "R:%.0f\" %s", radiusIn, spdHint);
+            }
+        }
+    } else {
+        // No summary yet — show raw gyro
+        float gx = imuGyroDPS(latest->gyro_x);
+        float gy = imuGyroDPS(latest->gyro_y);
+        float gz = imuGyroDPS(latest->gyro_z);
+        snprintf(line, sizeof(line), "G %+.1f %+.1f %+.1f", gx, gy, gz);
+    }
     u8g2.drawStr(0, 34, line);
 
     // Line 4: Temperature

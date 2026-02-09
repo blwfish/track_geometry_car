@@ -241,8 +241,10 @@ void loop() {
             uint8_t clients = wifiReady ? wifiClientCount() : 0;
             bool rec = flashLoggerIsRecording();
             uint32_t recElapsed = rec ? (now - recordingStartTime) / 1000 : 0;
+            // Pass latest summary for geometry display (curve/straight indicator)
+            const summary_1s_t *sumPtr = (latestSummary.sample_count > 0) ? &latestSummary : nullptr;
             displayUpdate(latest, totalSamples, droppedSamples,
-                          measuredSamplesPerSec, clients, rec, recElapsed);
+                          measuredSamplesPerSec, clients, rec, recElapsed, sumPtr);
         }
     }
 
