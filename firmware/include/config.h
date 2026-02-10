@@ -179,4 +179,16 @@ struct __attribute__((packed)) survey_header_t {
     uint8_t  reserved2[32];      // Pad to 64 bytes total
 };
 
+// ===== TRUCK CONFIGURATION =====
+// Default values for standard Bettendorf trucks on 55' flat car.
+// Stored in NVS, overridable from browser Car Setup UI.
+#define TRUCK_NVS_NAMESPACE     "truck"
+#define TRUCK_NVS_KEY_AXLES     "axles"     // uint8_t: axles per truck
+#define TRUCK_NVS_KEY_AXLE_SP   "axle_sp"   // float: axle spacing in mm
+#define TRUCK_NVS_KEY_TRUCK_SP  "truck_sp"  // float: truck spacing in mm
+
+#define TRUCK_DEFAULT_AXLES       2       // 2 axles per truck (standard)
+#define TRUCK_DEFAULT_AXLE_SP     16.5f   // mm (~4.7' prototype in HO)
+#define TRUCK_DEFAULT_TRUCK_SP    54.0f   // mm (bolster-to-bolster, 55' flat car)
+
 #endif // CONFIG_H

@@ -261,6 +261,36 @@ Items here are aspirational — not all will be implemented.
   - New construction settling: frequent surveys of newly built sections to
     track initial settlement curve
 
+### Truck/Car Calibration Run
+- **Purpose**: Roll the car across a known single defect (e.g., code 70→83
+  rail height transition) to learn the car's actual impulse response, rather
+  than relying on ruler-measured axle spacing and assumed speed.
+- **What it measures**:
+  - **Actual axle delay** — from peak spacing, accounts for real wheel diameter,
+    slip, and truck geometry under load
+  - **Actual truck delay** — bolster-to-bolster timing measured, not assumed
+  - **Impulse template** — the waveform shape of "one wheelset crossing one defect"
+    on this specific car, usable as a matched filter for detection in real surveys
+  - **Cross-axis coupling** — how much a purely vertical defect produces lateral
+    response (due to truck play, coupler forces, body roll)
+  - **Amplitude calibration** — a known 0.33mm step produces X g on this car,
+    enabling severity estimation from measured g-values
+  - **Front/rear transfer function** — with dual IMU, how the car body dynamics
+    differ between front and rear truck response
+- **Procedure**: Place car on track with one deliberate defect, roll across at
+  a known speed. Firmware records reference waveform. Could be triggered from
+  a "Calibrate Car" button in the browser UI.
+- **Storage**: Reference impulse (~50-100 samples around peak) saved as a small
+  JSON file on LittleFS or in NVS.
+- **Usage in analysis**:
+  - Simple: auto-measure axle/truck delays from peak spacing, store as calibrated
+    truck config (replacing ruler-measured defaults)
+  - Advanced: cross-correlate reference template against survey data — peaks in
+    correlation output are detected defects, correlation amplitude gives severity
+    relative to the reference
+  - Library mode: multiple reference impulses (joint, gauge kink, frog) for
+    multi-type matched-filter classification
+
 ### MQTT Throttle Control (Autonomous Survey Speed)
 - **Purpose**: The geometry car commands its own locomotive to the optimal
   survey speed via MQTT → JMRI → DCC, ensuring consistent data quality

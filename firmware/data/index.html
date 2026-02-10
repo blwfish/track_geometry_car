@@ -225,6 +225,29 @@ button:disabled { opacity: 0.4; cursor: default; }
 #wifi-msg { font-size: 12px; color: #fbbf24; padding: 4px 0; display: none; }
 #geom-group { border: 1px solid #1e3a5f; }
 #speed-input:focus { outline: 1px solid #0f3460; }
+#car-setup { padding: 8px 12px; }
+#cs-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 8px; background: #16213e; border-radius: 4px 4px 0 0;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+#cs-header h3 { font-size: 12px; font-weight: normal; color: #aaa; text-transform: uppercase; }
+#cs-toggle { color: #666; font-size: 12px; }
+#cs-body { background: #121a30; border-radius: 0 0 4px 4px; padding: 8px; display: none; }
+#cs-body.open { display: block; }
+.cs-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: #aaa; padding: 3px 0;
+}
+.cs-row label { flex: 1; }
+.cs-row input[type="number"] {
+    width: 52px; background: #0f0f23; color: #e0e0e0; border: 1px solid #333;
+    border-radius: 3px; font-family: inherit; font-size: 12px; text-align: right; padding: 2px 4px;
+}
+.cs-row input[type="number"]:focus { outline: 1px solid #0f3460; }
+.cs-unit { font-size: 11px; color: #666; min-width: 24px; }
+#btn-save-truck { background: #1e3a5f; color: #8cb4e0; padding: 6px 12px; font-size: 11px; margin-top: 6px; }
+#cs-msg { font-size: 11px; color: #4ade80; display: none; margin-top: 4px; }
 #analysis { padding: 8px 12px; display: none; }
 #analysis.show { display: block; }
 #an-header {
@@ -236,7 +259,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 #an-toggle { color: #666; font-size: 12px; }
 #an-body { background: #121a30; border-radius: 0 0 4px 4px; padding: 8px; display: none; }
 #an-body.open { display: block; }
-.an-chart { width: 100%; height: 140px; margin-bottom: 8px; border-radius: 4px; }
+.an-chart { width: 100%; margin-bottom: 8px; border-radius: 4px; }
+#an-path { height: 220px; }
+#an-timeline { height: 160px; }
 .an-label { font-size: 11px; color: #888; margin-bottom: 2px; }
 #an-summary { font-size: 12px; color: #aaa; margin-bottom: 8px; line-height: 1.6; }
 #an-summary b { color: #e0e0e0; }
@@ -244,6 +269,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 @media (min-width: 601px) {
     canvas { height: 400px; min-height: 300px; }
     #readouts { grid-template-columns: 1fr 1fr 1fr; }
+    #an-path { height: 280px; }
+    #an-timeline { height: 200px; }
 }
 /* Landscape phone: taller chart, compact readouts */
 @media (orientation: landscape) and (max-height: 500px) {
@@ -318,13 +345,7 @@ button:disabled { opacity: 0.4; cursor: default; }
         <div class="readout-row"><span class="readout-label">Yaw</span><span class="readout-val" id="geom-yaw">-</span></div>
         <div class="readout-row"><span class="readout-label">Grade</span><span class="readout-val" id="geom-grade">-</span></div>
         <div class="readout-row"><span class="readout-label">SNR</span><span class="readout-val" id="geom-snr">-</span></div>
-        <div class="readout-row"><span class="readout-label">Speed</span><span class="readout-val" id="geom-speed">
-            <input type="number" id="speed-input" value="10" min="1" max="60" step="1"
-                   style="width:36px; background:#0f0f23; color:#e0e0e0; border:1px solid #333;
-                          border-radius:3px; font-family:inherit; font-size:12px; text-align:right;
-                          padding:1px 3px;">
-            <span style="font-size:11px; color:#888;">mph</span>
-        </span></div>
+        <div class="readout-row"><span class="readout-label">Speed</span><span class="readout-val" id="geom-speed">-</span></div>
     </div>
 </div>
 
@@ -338,6 +359,37 @@ button:disabled { opacity: 0.4; cursor: default; }
     <span id="cal-msg"></span>
 </div>
 
+<div id="car-setup">
+    <div id="cs-header" onclick="toggleCarSetup()">
+        <h3>Car Setup</h3>
+        <span id="cs-toggle">&#9660;</span>
+    </div>
+    <div id="cs-body">
+        <div class="cs-row">
+            <label>Speed</label>
+            <input type="number" id="speed-input" value="10" min="1" max="60" step="1">
+            <span class="cs-unit">mph</span>
+        </div>
+        <div class="cs-row">
+            <label>Axles per truck</label>
+            <input type="number" id="cs-axles" value="2" min="1" max="4" step="1">
+            <span class="cs-unit"></span>
+        </div>
+        <div class="cs-row">
+            <label>Axle spacing</label>
+            <input type="number" id="cs-axle-sp" value="16.5" min="1" max="200" step="0.1">
+            <span class="cs-unit">mm</span>
+        </div>
+        <div class="cs-row">
+            <label>Truck spacing</label>
+            <input type="number" id="cs-truck-sp" value="54" min="1" max="200" step="0.1">
+            <span class="cs-unit">mm</span>
+        </div>
+        <button id="btn-save-truck" onclick="saveTruckConfig()">Save to Car</button>
+        <div id="cs-msg">Saved</div>
+    </div>
+</div>
+
 <div id="analysis">
     <div id="an-header" onclick="toggleAnalysis()">
         <h3>Recording Analysis</h3>
@@ -345,22 +397,21 @@ button:disabled { opacity: 0.4; cursor: default; }
     </div>
     <div id="an-body">
         <div id="an-summary"></div>
-        <div class="an-label">Ride Quality (vertical accel RMS)</div>
+        <div class="an-label">Track Plan View (integrated heading)</div>
         <div class="an-legend">
-            <span style="color:#4ade80">&#9608; Smooth</span> &nbsp;
-            <span style="color:#fbbf24">&#9608; Fair</span> &nbsp;
-            <span style="color:#ef4444">&#9608; Rough</span>
+            <span style="color:#4488ff">&#9608; Outbound</span> &nbsp;
+            <span style="color:#fbbf24">&#9608; Return</span> &nbsp;
+            <span style="color:#888">&#9679; 5s ticks</span>
         </div>
-        <canvas class="an-chart" id="an-ride"></canvas>
-        <div class="an-label">Curvature (yaw rate, 1s windows)</div>
+        <canvas class="an-chart" id="an-path"></canvas>
+        <div class="an-label">Accelerometer Timeline</div>
         <div class="an-legend">
-            <span style="color:#60a5fa">&#9608; Left</span> &nbsp;
-            <span style="color:#f97316">&#9608; Right</span> &nbsp;
-            <span style="color:#4ade80">&#9608; Straight</span>
+            <span style="color:#4488ff">&#9472; Vertical (az)</span> &nbsp;
+            <span style="color:#44ff88">&#9472; Lateral (ay)</span> &nbsp;
+            <span style="color:#ef4444">&#9632; Bump/Joint</span> &nbsp;
+            <span style="color:#f97316">&#9632; Kick/Kink</span>
         </div>
-        <canvas class="an-chart" id="an-curve"></canvas>
-        <div class="an-label">Spectrum (Z-accel FFT, 0-50Hz)</div>
-        <canvas class="an-chart" id="an-spectrum"></canvas>
+        <canvas class="an-chart" id="an-timeline"></canvas>
     </div>
 </div>
 
@@ -454,9 +505,10 @@ function wsConnect() {
         document.getElementById('conn-status').innerHTML =
             '<span class="status-dot dot-green"></span>Connected';
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-        // Fetch flash status on connect
+        // Fetch flash status and config on connect
         fetchStatus();
         fetchSurveys();
+        fetchTruckConfig();
     };
 
     ws.onclose = () => {
@@ -578,6 +630,7 @@ function updateGeometry(yawMeanDps, azRms, axMean, ayMean, azMean) {
     const absYaw = Math.abs(yawMeanDps);
     const snr = absYaw / GYRO_NOISE_DPS;
     const speedMph = parseFloat(document.getElementById('speed-input').value) || 10;
+    document.getElementById('geom-speed').textContent = speedMph + ' mph';
     // Convert scale mph to model mm/s (HO = 1:87)
     const speedMms = speedMph * 447.04 / 87.0;  // mph to mm/s prototype, then /87
 
@@ -901,6 +954,7 @@ function saveRec() {
     if (name === null) return;  // user cancelled
     const filename = (name.trim() || defaultName) + '.json';
 
+    const truckCfg = getTruckConfig();
     const survey = {
         version: dualImuDetected ? 2 : 1,
         imu_count: dualImuDetected ? 2 : 1,
@@ -911,6 +965,12 @@ function saveRec() {
         sample_rate_hz: 100,
         accel_range_g: 2,
         gyro_range_dps: 250,
+        speed_mph: parseFloat(document.getElementById('speed-input').value) || 10,
+        truck: {
+            axles_per_truck: truckCfg.axles,
+            axle_spacing_mm: truckCfg.axleSpacingMm,
+            truck_spacing_mm: truckCfg.truckSpacingMm
+        },
         samples: recSamples
     };
     const json = JSON.stringify(survey);
@@ -947,6 +1007,53 @@ function parseRecStatus(v) {
 
 // ===== File Manager =====
 let fmOpen = false;
+
+// ===== Car Setup =====
+let csOpen = false;
+
+function toggleCarSetup() {
+    csOpen = !csOpen;
+    document.getElementById('cs-body').className = csOpen ? 'open' : '';
+    document.getElementById('cs-toggle').innerHTML = csOpen ? '&#9650;' : '&#9660;';
+}
+
+function fetchTruckConfig() {
+    fetch('/api/config/truck')
+        .then(r => r.json())
+        .then(cfg => {
+            document.getElementById('cs-axles').value = cfg.axles;
+            document.getElementById('cs-axle-sp').value = cfg.axle_spacing_mm;
+            document.getElementById('cs-truck-sp').value = cfg.truck_spacing_mm;
+        })
+        .catch(() => {});  // use defaults in HTML if fetch fails
+}
+
+function saveTruckConfig() {
+    const cfg = {
+        axles: parseInt(document.getElementById('cs-axles').value) || 2,
+        axle_spacing_mm: parseFloat(document.getElementById('cs-axle-sp').value) || 16.5,
+        truck_spacing_mm: parseFloat(document.getElementById('cs-truck-sp').value) || 54.0
+    };
+    fetch('/api/config/truck', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+    }).then(r => {
+        if (r.ok) {
+            const msg = document.getElementById('cs-msg');
+            msg.style.display = 'block';
+            setTimeout(() => msg.style.display = 'none', 2000);
+        }
+    }).catch(() => {});
+}
+
+function getTruckConfig() {
+    return {
+        axles: parseInt(document.getElementById('cs-axles').value) || 2,
+        axleSpacingMm: parseFloat(document.getElementById('cs-axle-sp').value) || 16.5,
+        truckSpacingMm: parseFloat(document.getElementById('cs-truck-sp').value) || 54.0
+    };
+}
 
 function toggleFileManager() {
     fmOpen = !fmOpen;
@@ -1193,8 +1300,8 @@ function toggleAnalysis() {
 }
 
 function analyzeRec() {
-    if (recSamples.length < 100) {
-        alert('Need at least 1 second of data to analyze.');
+    if (recSamples.length < 200) {
+        alert('Need at least 2 seconds of data to analyze.');
         return;
     }
     document.getElementById('analysis').className = 'show';
@@ -1204,11 +1311,21 @@ function analyzeRec() {
 
     const n = recSamples.length;
     const dur = n / 100;
-    const winSize = 100;  // 1-second windows
-    const nWin = Math.floor(n / winSize);
+    const speedMph = parseFloat(document.getElementById('speed-input').value) || 10;
+    const truckCfg = getTruckConfig();
 
-    // Compute 1-second windowed statistics
-    const windows = [];
+    // Compute track path from integrated heading
+    const pathData = computeTrackPath(recSamples, speedMph);
+
+    // Detect and classify events
+    let { events, azDev, ayDev } = detectEvents(recSamples);
+    events = classifyEvents(events, truckCfg, speedMph);
+
+    // Summary statistics (1-second windows)
+    const winSize = 100;
+    const nWin = Math.floor(n / winSize);
+    let smoothSec = 0, fairSec = 0, roughSec = 0;
+    let curveSec = 0, straightSec = 0;
     for (let w = 0; w < nWin; w++) {
         let azSum2 = 0, gzSum = 0;
         for (let i = 0; i < winSize; i++) {
@@ -1218,45 +1335,309 @@ function analyzeRec() {
         }
         const azRms = Math.sqrt(azSum2 / winSize);
         const gzMean = gzSum / winSize;
-        windows.push({ azRms, gzMean, t: (w + 0.5) * winSize / 100 });
+        if (azRms < 1.01) smoothSec++;
+        else if (azRms < 1.03) fairSec++;
+        else roughSec++;
+        if (Math.abs(gzMean) >= 0.3) curveSec++;
+        else straightSec++;
     }
 
-    // Summary statistics
-    let smoothSec = 0, fairSec = 0, roughSec = 0;
-    let curveSec = 0, straightSec = 0;
-    windows.forEach(w => {
-        if (w.azRms < 1.01) smoothSec++;
-        else if (w.azRms < 1.03) fairSec++;
-        else roughSec++;
-        if (Math.abs(w.gzMean) >= 0.3) curveSec++;
-        else straightSec++;
-    });
+    // Count classified event types
+    const classMap = {};
+    for (const ev of events) {
+        const cls = ev.classification || ev.type;
+        classMap[cls] = (classMap[cls] || 0) + 1;
+    }
+    let eventText = Object.entries(classMap)
+        .map(([cls, cnt]) => '<b>' + cnt + '</b> ' + cls)
+        .join(', ');
+    if (!eventText) eventText = 'none';
+
     const sumEl = document.getElementById('an-summary');
     sumEl.innerHTML =
-        '<b>' + n.toLocaleString() + '</b> samples, <b>' + dur.toFixed(1) + 's</b> duration<br>' +
+        '<b>' + n.toLocaleString() + '</b> samples, <b>' + dur.toFixed(1) +
+        's</b> at <b>' + speedMph + '</b> scale mph<br>' +
         'Ride: <b style="color:#4ade80">' + smoothSec + 's smooth</b>, ' +
         '<b style="color:#fbbf24">' + fairSec + 's fair</b>, ' +
         '<b style="color:#ef4444">' + roughSec + 's rough</b><br>' +
-        'Track: <b>' + straightSec + 's</b> straight, <b>' + curveSec + 's</b> in curves';
+        'Track: <b>' + straightSec + 's</b> straight, <b>' + curveSec +
+        's</b> in curves<br>' +
+        'Events: ' + eventText;
 
-    // --- Ride Quality Chart ---
-    drawBarChart('an-ride', windows, w => w.azRms, w => {
-        if (w.azRms < 1.01) return '#4ade80';
-        if (w.azRms < 1.03) return '#fbbf24';
-        return '#ef4444';
-    }, 'g');
-
-    // --- Curvature Chart ---
-    drawLineChart('an-curve', windows, w => w.gzMean, w => {
-        if (Math.abs(w.gzMean) < 0.3) return '#4ade80';
-        return w.gzMean > 0 ? '#60a5fa' : '#f97316';
-    }, '\u00b0/s');
-
-    // --- Spectrum (FFT) ---
-    drawSpectrum('an-spectrum', recSamples);
+    // Draw charts
+    drawPathChart('an-path', pathData);
+    drawTimelineChart('an-timeline', recSamples, azDev, ayDev, events);
 }
 
-function drawBarChart(canvasId, data, valFn, colorFn, unit) {
+// ===== Track Path Computation =====
+
+function computeTrackPath(samples, speedMph) {
+    const dt = 0.01;  // 10ms at 100Hz
+    // Convert scale mph to model mm/s: mph * 447.04mm/s / 87 (HO scale)
+    const modelMmPerSec = speedMph * 447.04 / 87.0;
+    const distPerSample = modelMmPerSec * dt;
+    const n = samples.length;
+
+    // Extract gz (yaw rate in dps)
+    const gz = new Float64Array(n);
+    for (let i = 0; i < n; i++) gz[i] = samples[i].gz;
+
+    // Linear detrend gz to remove gyro bias drift
+    // Fit gz[i] = a + b*i via least-squares
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let i = 0; i < n; i++) {
+        sx += i; sy += gz[i]; sxx += i * i; sxy += i * gz[i];
+    }
+    const b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    const a = (sy - b * sx) / n;
+    for (let i = 0; i < n; i++) gz[i] -= (a + b * i);
+
+    // Integrate gz -> heading (radians)
+    const heading = new Float64Array(n);
+    heading[0] = 0;
+    for (let i = 1; i < n; i++) {
+        heading[i] = heading[i - 1] + gz[i] * dt * Math.PI / 180.0;
+    }
+
+    // Integrate heading -> XY position (mm)
+    const pathX = new Float64Array(n);
+    const pathY = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+        pathX[i] = pathX[i - 1] + distPerSample * Math.cos(heading[i]);
+        pathY[i] = pathY[i - 1] + distPerSample * Math.sin(heading[i]);
+    }
+
+    // Ride quality per sample (rolling 100-sample az RMS)
+    const rideQuality = new Uint8Array(n);  // 0=smooth, 1=fair, 2=rough
+    const WIN = 100;
+    let runSum = 0;
+    const half = Math.floor(WIN / 2);
+    for (let i = 0; i < Math.min(half, n); i++) runSum += samples[i].az * samples[i].az;
+    for (let i = 0; i < n; i++) {
+        const rEdge = i + half;
+        if (rEdge < n) runSum += samples[rEdge].az * samples[rEdge].az;
+        const lEdge = i - half - 1;
+        if (lEdge >= 0) runSum -= samples[lEdge].az * samples[lEdge].az;
+        const wLen = Math.min(rEdge + 1, n) - Math.max(i - half, 0);
+        const rms = Math.sqrt(runSum / wLen);
+        if (rms < 1.01) rideQuality[i] = 0;
+        else if (rms < 1.03) rideQuality[i] = 1;
+        else rideQuality[i] = 2;
+    }
+
+    // Direction detection: find turnaround points
+    // A turnaround is where the car reverses — detected by looking at
+    // the longitudinal displacement derivative (are we still moving "forward"?)
+    // Compute forward progress along initial heading direction
+    const direction = new Uint8Array(n);  // 0=outbound, 1=return
+    // Use the displacement vector projected onto the initial heading
+    // The initial heading direction is (1, 0) since heading[0] = 0
+    // A simpler approach: smooth ax and look for sign reversal indicating decel → re-accel
+    // But the most robust: track cumulative distance from start along the path
+    // and detect when the car starts getting closer to start
+    let distFromStart = 0;
+    let maxDist = 0;
+    let turnaroundIdx = -1;
+    const dists = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        dists[i] = Math.sqrt(pathX[i] * pathX[i] + pathY[i] * pathY[i]);
+        if (dists[i] > maxDist) {
+            maxDist = dists[i];
+            turnaroundIdx = i;
+        }
+    }
+    // Verify it's actually a turnaround: must move at least 10% back toward start
+    // after the max distance point
+    const endDist = dists[n - 1];
+    const returnAmount = maxDist > 0 ? (maxDist - endDist) / maxDist : 0;
+    if (returnAmount > 0.1 && turnaroundIdx > n * 0.1 && turnaroundIdx < n * 0.9) {
+        // Mark everything after turnaround as return leg
+        for (let i = turnaroundIdx; i < n; i++) direction[i] = 1;
+    }
+    // else: whole survey is one direction (outbound)
+
+    return { pathX, pathY, heading, rideQuality, direction };
+}
+
+// ===== Event Detection =====
+
+function detectEvents(samples) {
+    const n = samples.length;
+    const WIN = 100;  // 1-second running mean window
+    const half = Math.floor(WIN / 2);
+
+    // Compute deviation from local mean (removes gravity, grade, curve forces)
+    const azDev = new Float64Array(n);
+    const ayDev = new Float64Array(n);
+    // Running sums for O(N) mean computation
+    let azRunSum = 0, ayRunSum = 0;
+    for (let i = 0; i < Math.min(half, n); i++) {
+        azRunSum += samples[i].az; ayRunSum += samples[i].ay;
+    }
+    for (let i = 0; i < n; i++) {
+        const rEdge = i + half;
+        if (rEdge < n) { azRunSum += samples[rEdge].az; ayRunSum += samples[rEdge].ay; }
+        const lEdge = i - half - 1;
+        if (lEdge >= 0) { azRunSum -= samples[lEdge].az; ayRunSum -= samples[lEdge].ay; }
+        const wLen = Math.min(rEdge + 1, n) - Math.max(i - half, 0);
+        azDev[i] = samples[i].az - azRunSum / wLen;
+        ayDev[i] = samples[i].ay - ayRunSum / wLen;
+    }
+
+    const events = [];
+    const MIN_SPACING = 10;  // 100ms between events
+    const VERT_THRESH = 0.02;  // g deviation from local mean
+    const LAT_THRESH = 0.02;   // g deviation from local mean
+
+    // Detect vertical bumps
+    let lastVert = -MIN_SPACING;
+    for (let i = 1; i < n - 1; i++) {
+        const v = Math.abs(azDev[i]);
+        if (v > VERT_THRESH &&
+            v >= Math.abs(azDev[i - 1]) && v >= Math.abs(azDev[i + 1]) &&
+            (i - lastVert) >= MIN_SPACING) {
+            // Prominence check: peak > 2x local RMS (50 samples)
+            const pS = Math.max(0, i - 25), pE = Math.min(n, i + 25);
+            let sum2 = 0;
+            for (let j = pS; j < pE; j++) sum2 += azDev[j] * azDev[j];
+            const localRms = Math.sqrt(sum2 / (pE - pS));
+            if (v > localRms * 2.0) {
+                events.push({
+                    type: 'bump', index: i, time: i * 0.01, value: azDev[i],
+                    label: (azDev[i] > 0 ? '+' : '') + azDev[i].toFixed(3) + 'g'
+                });
+                lastVert = i;
+            }
+        }
+    }
+
+    // Detect lateral kicks
+    let lastLat = -MIN_SPACING;
+    for (let i = 1; i < n - 1; i++) {
+        const v = Math.abs(ayDev[i]);
+        if (v > LAT_THRESH &&
+            v >= Math.abs(ayDev[i - 1]) && v >= Math.abs(ayDev[i + 1]) &&
+            (i - lastLat) >= MIN_SPACING) {
+            const pS = Math.max(0, i - 25), pE = Math.min(n, i + 25);
+            let sum2 = 0;
+            for (let j = pS; j < pE; j++) sum2 += ayDev[j] * ayDev[j];
+            const localRms = Math.sqrt(sum2 / (pE - pS));
+            if (v > localRms * 2.0) {
+                const side = ayDev[i] > 0 ? 'R' : 'L';
+                events.push({
+                    type: 'kick', index: i, time: i * 0.01, value: ayDev[i],
+                    label: side + ' ' + Math.abs(ayDev[i]).toFixed(3) + 'g'
+                });
+                lastLat = i;
+            }
+        }
+    }
+
+    events.sort((a, b) => a.index - b.index);
+    return { events, azDev, ayDev };
+}
+
+// ===== Event Classification =====
+
+function classifyEvents(events, truckConfig, speedMph) {
+    if (events.length === 0) return events;
+
+    // Compute expected delays in samples (at 100Hz)
+    const modelMmPerSec = speedMph * 447.04 / 87.0;
+    const axleDelay = modelMmPerSec > 0
+        ? (truckConfig.axleSpacingMm / modelMmPerSec) * 100 : 32;
+    const truckDelay = modelMmPerSec > 0
+        ? (truckConfig.truckSpacingMm / modelMmPerSec) * 100 : 105;
+    const tolerance = 0.35;  // ±35% timing tolerance
+
+    // Group events by temporal proximity
+    // Events within 1.5x axle delay are candidates for same defect
+    const groupWindow = axleDelay * 1.5;
+    const maxGroupSpan = truckDelay + axleDelay * 1.5;
+    const groups = [];
+    let currentGroup = null;
+
+    for (const ev of events) {
+        if (!currentGroup || (ev.index - currentGroup[0].index) > maxGroupSpan ||
+            (ev.index - currentGroup[currentGroup.length - 1].index) > groupWindow) {
+            currentGroup = [ev];
+            groups.push(currentGroup);
+        } else {
+            currentGroup.push(ev);
+        }
+    }
+
+    // Classify each group
+    for (const group of groups) {
+        const bumps = group.filter(e => e.type === 'bump');
+        const kicks = group.filter(e => e.type === 'kick');
+        const hasBumps = bumps.length > 0;
+        const hasKicks = kicks.length > 0;
+
+        let classification;
+
+        if (hasBumps && hasKicks) {
+            // Simultaneous vertical + lateral → complex defect
+            // Check if the bump and kick are close together (within half axle delay)
+            const bIdx = bumps[0].index, kIdx = kicks[0].index;
+            if (Math.abs(bIdx - kIdx) < axleDelay * 0.5) {
+                classification = 'frog?';
+            } else {
+                classification = 'xing?';
+            }
+        } else if (hasBumps) {
+            if (bumps.length >= 4) {
+                // Check for axle+truck spacing pattern
+                classification = 'joint';
+            } else if (bumps.length >= 2) {
+                // Check if spacing matches axle delay
+                const spacing = bumps[1].index - bumps[0].index;
+                if (Math.abs(spacing - axleDelay) < axleDelay * tolerance) {
+                    classification = 'joint?';
+                } else if (Math.abs(spacing - truckDelay) < truckDelay * tolerance) {
+                    classification = 'joint?';
+                } else {
+                    classification = 'bump';
+                }
+            } else {
+                classification = 'bump';
+            }
+        } else if (hasKicks) {
+            if (kicks.length >= 2) {
+                const spacing = kicks[1].index - kicks[0].index;
+                if (Math.abs(spacing - axleDelay) < axleDelay * tolerance) {
+                    classification = 'kink';
+                } else {
+                    classification = 'kink?';
+                }
+            } else {
+                classification = 'kink?';
+            }
+        }
+
+        // Apply classification label to all events in the group
+        for (const ev of group) {
+            ev.classification = classification;
+            ev.label = classification;
+        }
+    }
+
+    return events;
+}
+
+// ===== Track Path Chart (plan view map) =====
+
+function computeNiceScaleBar(rangeMm) {
+    const nice = [10, 25, 50, 100, 254, 500, 1000];  // 254mm = 10"
+    const target = rangeMm * 0.2;
+    let best = nice[0];
+    for (const v of nice) {
+        if (Math.abs(v - target) < Math.abs(best - target)) best = v;
+    }
+    return best;
+}
+
+function drawPathChart(canvasId, pathData) {
     const canvas = document.getElementById(canvasId);
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -1265,87 +1646,169 @@ function drawBarChart(canvasId, data, valFn, colorFn, unit) {
     const c = canvas.getContext('2d');
     c.scale(dpr, dpr);
     const w = rect.width, h = rect.height;
-    const m = { top: 5, right: 8, bottom: 18, left: 40 };
+    const m = { top: 12, right: 12, bottom: 12, left: 12 };
     const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
 
     c.clearRect(0, 0, w, h);
     c.fillStyle = '#0a0f1e';
     c.fillRect(m.left, m.top, pw, ph);
 
-    if (data.length === 0) return;
+    const { pathX, pathY, heading, rideQuality, direction } = pathData;
+    const n = pathX.length;
+    if (n < 2) return;
 
-    // Auto-scale Y
-    let yMin = Infinity, yMax = -Infinity;
-    data.forEach(d => { const v = valFn(d); if (v < yMin) yMin = v; if (v > yMax) yMax = v; });
-    const yRange = yMax - yMin || 0.01;
-    yMin -= yRange * 0.05;
-    yMax += yRange * 0.05;
+    // Bounding box
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (let i = 0; i < n; i++) {
+        if (pathX[i] < xMin) xMin = pathX[i]; if (pathX[i] > xMax) xMax = pathX[i];
+        if (pathY[i] < yMin) yMin = pathY[i]; if (pathY[i] > yMax) yMax = pathY[i];
+    }
+    // Add 10% padding, ensure minimum range
+    const xRange = Math.max(xMax - xMin, 1);
+    const yRange = Math.max(yMax - yMin, 1);
+    xMin -= xRange * 0.1; xMax += xRange * 0.1;
+    yMin -= yRange * 0.1; yMax += yRange * 0.1;
+
+    // Fit to canvas preserving aspect ratio
+    const scaleX = pw / (xMax - xMin);
+    const scaleY = ph / (yMax - yMin);
+    const scale = Math.min(scaleX, scaleY);
+    const usedW = (xMax - xMin) * scale;
+    const usedH = (yMax - yMin) * scale;
+    const offX = m.left + (pw - usedW) / 2;
+    const offY = m.top + (ph - usedH) / 2;
+
+    function toSX(x) { return offX + (x - xMin) * scale; }
+    function toSY(y) { return offY + usedH - (y - yMin) * scale; }
+
+    // Draw path segments colored by travel direction
+    const DIR_COLORS = ['#4488ff', '#fbbf24'];  // 0=outbound (blue), 1=return (yellow)
+    const STEP = Math.max(1, Math.floor(n / (pw * 2)));
+    c.lineWidth = 2.5;
+    c.lineCap = 'round';
+    for (let i = STEP; i < n; i += STEP) {
+        c.strokeStyle = DIR_COLORS[direction[i]];
+        c.beginPath();
+        c.moveTo(toSX(pathX[i - STEP]), toSY(pathY[i - STEP]));
+        c.lineTo(toSX(pathX[i]), toSY(pathY[i]));
+        c.stroke();
+    }
+
+    // Start marker (green circle + label)
+    c.fillStyle = '#4ade80';
+    c.beginPath();
+    c.arc(toSX(pathX[0]), toSY(pathY[0]), 4, 0, 2 * Math.PI);
+    c.fill();
+    c.fillStyle = '#fff';
+    c.font = '9px monospace';
+    c.textAlign = 'left';
+    c.fillText('Start', toSX(pathX[0]) + 6, toSY(pathY[0]) + 3);
+
+    // End marker (red circle)
+    c.fillStyle = '#ef4444';
+    c.beginPath();
+    c.arc(toSX(pathX[n - 1]), toSY(pathY[n - 1]), 4, 0, 2 * Math.PI);
+    c.fill();
+    c.fillStyle = '#fff';
+    c.textAlign = 'left';
+    c.fillText('End', toSX(pathX[n - 1]) + 6, toSY(pathY[n - 1]) + 3);
+
+    // Direction arrows every 5 seconds
+    c.fillStyle = 'rgba(255,255,255,0.25)';
+    const arrowInt = 500;
+    for (let i = arrowInt; i < n; i += arrowInt) {
+        const sx = toSX(pathX[i]), sy = toSY(pathY[i]);
+        const ang = heading[i];
+        c.save();
+        c.translate(sx, sy);
+        c.rotate(-ang);  // screen Y is inverted
+        c.beginPath();
+        c.moveTo(5, 0); c.lineTo(-3, -3); c.lineTo(-3, 3);
+        c.closePath(); c.fill();
+        c.restore();
+    }
+
+    // Time tick marks every 5s
+    c.fillStyle = 'rgba(255,255,255,0.4)';
+    c.font = '8px monospace';
+    c.textAlign = 'center';
+    const tickInt = 500;
+    for (let i = tickInt; i < n; i += tickInt) {
+        const sx = toSX(pathX[i]), sy = toSY(pathY[i]);
+        c.beginPath();
+        c.arc(sx, sy, 2, 0, 2 * Math.PI);
+        c.fill();
+        c.fillText((i / 100) + 's', sx, sy - 5);
+    }
+
+    // Scale bar (bottom-right)
+    const totalRange = Math.max(xMax - xMin, yMax - yMin);
+    const refMm = computeNiceScaleBar(totalRange);
+    const refPx = refMm * scale;
+    if (refPx > 20 && refPx < pw * 0.5) {
+        const sbX = m.left + pw - refPx - 8;
+        const sbY = m.top + ph - 8;
+        c.strokeStyle = '#888';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(sbX, sbY); c.lineTo(sbX + refPx, sbY);
+        c.stroke();
+        // End caps
+        c.beginPath();
+        c.moveTo(sbX, sbY - 3); c.lineTo(sbX, sbY + 3);
+        c.moveTo(sbX + refPx, sbY - 3); c.lineTo(sbX + refPx, sbY + 3);
+        c.stroke();
+        c.fillStyle = '#888';
+        c.font = '9px monospace';
+        c.textAlign = 'center';
+        const label = refMm >= 25.4 ? (refMm / 25.4).toFixed(0) + '"' : refMm + 'mm';
+        c.fillText(label, sbX + refPx / 2, sbY - 4);
+    }
+}
+
+// ===== Accelerometer Timeline with Sticky Notes =====
+
+function drawTimelineChart(canvasId, samples, azDev, ayDev, events) {
+    const canvas = document.getElementById(canvasId);
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const c = canvas.getContext('2d');
+    c.scale(dpr, dpr);
+    const w = rect.width, h = rect.height;
+
+    // Reserve space at top for sticky notes (2 tiers)
+    const NOTE_H = 14, NOTE_GAP = 2;
+    const noteZone = (NOTE_H + NOTE_GAP) * 2 + 4;
+    const mg = { top: noteZone + 4, right: 8, bottom: 18, left: 40 };
+    const pw = w - mg.left - mg.right, ph = h - mg.top - mg.bottom;
+
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#0a0f1e';
+    c.fillRect(mg.left, mg.top, pw, ph);
+
+    const n = samples.length;
+    const totalSec = n / 100;
+
+    // Auto-scale Y for both channels
+    let yMin = 0, yMax = 0;
+    for (let i = 0; i < n; i++) {
+        if (azDev[i] < yMin) yMin = azDev[i]; if (azDev[i] > yMax) yMax = azDev[i];
+        if (ayDev[i] < yMin) yMin = ayDev[i]; if (ayDev[i] > yMax) yMax = ayDev[i];
+    }
+    const pad = Math.max((yMax - yMin) * 0.1, 0.005);
+    yMin -= pad; yMax += pad;
     const yR = yMax - yMin;
 
-    // Y axis labels
-    c.fillStyle = '#666';
-    c.font = '9px monospace';
-    c.textAlign = 'right';
-    for (let i = 0; i <= 4; i++) {
-        const val = yMax - (yR * i / 4);
-        const y = m.top + (ph * i / 4);
-        c.fillText(val.toFixed(3), m.left - 3, y + 3);
-    }
-
-    // Draw bars
-    const barW = Math.max(1, pw / data.length);
-    data.forEach((d, i) => {
-        const v = valFn(d);
-        const barH = ((v - yMin) / yR) * ph;
-        const x = m.left + (i / data.length) * pw;
-        c.fillStyle = colorFn(d);
-        c.fillRect(x, m.top + ph - barH, barW + 0.5, barH);
-    });
-
-    // X axis: time
-    c.fillStyle = '#666';
-    c.textAlign = 'center';
-    c.font = '9px monospace';
-    const totalSec = data.length;
-    const step = totalSec <= 10 ? 1 : totalSec <= 30 ? 5 : totalSec <= 120 ? 10 : 30;
-    for (let s = 0; s <= totalSec; s += step) {
-        if (s === 0) continue;
-        const x = m.left + (s / totalSec) * pw;
-        c.fillText(s + 's', x, h - 3);
-    }
-}
-
-function drawLineChart(canvasId, data, valFn, colorFn, unit) {
-    const canvas = document.getElementById(canvasId);
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    const c = canvas.getContext('2d');
-    c.scale(dpr, dpr);
-    const w = rect.width, h = rect.height;
-    const m = { top: 5, right: 8, bottom: 18, left: 40 };
-    const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
-
-    c.clearRect(0, 0, w, h);
-    c.fillStyle = '#0a0f1e';
-    c.fillRect(m.left, m.top, pw, ph);
-
-    if (data.length === 0) return;
-
-    // Auto-scale Y (symmetric around zero for curvature)
-    let absMax = 0;
-    data.forEach(d => { const v = Math.abs(valFn(d)); if (v > absMax) absMax = v; });
-    absMax = Math.max(absMax * 1.1, 0.5);
-    const yMin = -absMax, yMax = absMax, yR = yMax - yMin;
+    function timeToX(t) { return mg.left + (t / totalSec) * pw; }
+    function valToY(v) { return mg.top + ph - ((v - yMin) / yR) * ph; }
 
     // Zero line
-    const zeroY = m.top + ph / 2;
     c.strokeStyle = '#333';
     c.lineWidth = 1;
     c.beginPath();
-    c.moveTo(m.left, zeroY);
-    c.lineTo(m.left + pw, zeroY);
+    c.moveTo(mg.left, valToY(0)); c.lineTo(mg.left + pw, valToY(0));
     c.stroke();
 
     // Y axis labels
@@ -1354,136 +1817,112 @@ function drawLineChart(canvasId, data, valFn, colorFn, unit) {
     c.textAlign = 'right';
     for (let i = 0; i <= 4; i++) {
         const val = yMax - (yR * i / 4);
-        const y = m.top + (ph * i / 4);
-        c.fillText(val.toFixed(1), m.left - 3, y + 3);
+        const y = mg.top + (ph * i / 4);
+        c.fillText(val.toFixed(3), mg.left - 3, y + 3);
     }
 
-    // Draw filled segments colored by direction
-    const barW = Math.max(1, pw / data.length);
-    data.forEach((d, i) => {
-        const v = valFn(d);
-        const y = m.top + ph - ((v - yMin) / yR) * ph;
-        const x = m.left + (i / data.length) * pw;
-        c.fillStyle = colorFn(d);
-        if (v >= 0) {
-            c.fillRect(x, y, barW + 0.5, zeroY - y);
-        } else {
-            c.fillRect(x, zeroY, barW + 0.5, y - zeroY);
-        }
-    });
+    // Draw traces (downsample to ~2 points per pixel)
+    const STEP = Math.max(1, Math.floor(n / (pw * 2)));
 
-    // X axis: time
-    c.fillStyle = '#666';
-    c.textAlign = 'center';
-    c.font = '9px monospace';
-    const totalSec = data.length;
-    const step = totalSec <= 10 ? 1 : totalSec <= 30 ? 5 : totalSec <= 120 ? 10 : 30;
-    for (let s = 0; s <= totalSec; s += step) {
-        if (s === 0) continue;
-        const x = m.left + (s / totalSec) * pw;
-        c.fillText(s + 's', x, h - 3);
-    }
-}
-
-function drawSpectrum(canvasId, samples) {
-    const canvas = document.getElementById(canvasId);
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    const c = canvas.getContext('2d');
-    c.scale(dpr, dpr);
-    const w = rect.width, h = rect.height;
-    const m = { top: 5, right: 8, bottom: 18, left: 40 };
-    const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
-
-    c.clearRect(0, 0, w, h);
-    c.fillStyle = '#0a0f1e';
-    c.fillRect(m.left, m.top, pw, ph);
-
-    // Simple DFT for Z-accel (up to 50Hz = Nyquist for 100Hz sample rate)
-    // Use at most 1024 samples for performance
-    const N = Math.min(samples.length, 1024);
-    const az = new Float32Array(N);
-    // Take the most recent N samples, remove mean
-    let mean = 0;
-    for (let i = 0; i < N; i++) mean += samples[samples.length - N + i].az;
-    mean /= N;
-    for (let i = 0; i < N; i++) az[i] = samples[samples.length - N + i].az - mean;
-
-    // Apply Hann window
-    for (let i = 0; i < N; i++) az[i] *= 0.5 * (1 - Math.cos(2 * Math.PI * i / N));
-
-    // Compute magnitude spectrum (only positive frequencies up to 50Hz)
-    const nBins = Math.floor(N / 2);
-    const mag = new Float32Array(nBins);
-    for (let k = 0; k < nBins; k++) {
-        let re = 0, im = 0;
-        for (let n = 0; n < N; n++) {
-            const angle = -2 * Math.PI * k * n / N;
-            re += az[n] * Math.cos(angle);
-            im += az[n] * Math.sin(angle);
-        }
-        mag[k] = Math.sqrt(re * re + im * im) / N;
-    }
-
-    // Find peak (skip DC bin 0)
-    let peakMag = 0, peakBin = 1;
-    for (let k = 1; k < nBins; k++) {
-        if (mag[k] > peakMag) { peakMag = mag[k]; peakBin = k; }
-    }
-    const peakHz = (peakBin * 100 / N).toFixed(1);
-
-    // Convert to dB (relative to peak)
-    const magDb = new Float32Array(nBins);
-    let dbMin = 0, dbMax = -Infinity;
-    for (let k = 1; k < nBins; k++) {
-        magDb[k] = 20 * Math.log10(Math.max(mag[k], 1e-10) / Math.max(peakMag, 1e-10));
-        if (magDb[k] < dbMin) dbMin = magDb[k];
-        if (magDb[k] > dbMax) dbMax = magDb[k];
-    }
-    dbMin = Math.max(dbMin, -60);  // floor at -60dB
-    const dbRange = dbMax - dbMin || 1;
-
-    // Y axis labels (dB)
-    c.fillStyle = '#666';
-    c.font = '9px monospace';
-    c.textAlign = 'right';
-    for (let i = 0; i <= 4; i++) {
-        const val = dbMax - (dbRange * i / 4);
-        const y = m.top + (ph * i / 4);
-        c.fillText(val.toFixed(0) + 'dB', m.left - 3, y + 3);
-    }
-
-    // Draw spectrum line
-    c.strokeStyle = '#a78bfa';
-    c.lineWidth = 1.5;
+    // Vertical accel deviation (blue)
+    c.strokeStyle = '#4488ff';
+    c.lineWidth = 1;
     c.beginPath();
-    let started = false;
-    for (let k = 1; k < nBins; k++) {
-        const freq = k * 100 / N;
-        const x = m.left + (freq / 50) * pw;
-        const db = Math.max(magDb[k], dbMin);
-        const y = m.top + ph - ((db - dbMin) / dbRange) * ph;
-        if (!started) { c.moveTo(x, y); started = true; }
-        else c.lineTo(x, y);
+    for (let i = 0; i < n; i += STEP) {
+        const x = timeToX(i / 100), y = valToY(azDev[i]);
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.stroke();
 
-    // Mark peak frequency
-    const peakX = m.left + (peakBin * 100 / N / 50) * pw;
-    const peakY = m.top;
-    c.fillStyle = '#fbbf24';
-    c.font = '9px monospace';
-    c.textAlign = 'center';
-    c.fillText(peakHz + 'Hz', peakX, peakY + 10);
+    // Lateral accel deviation (green)
+    c.strokeStyle = '#44ff88';
+    c.lineWidth = 1;
+    c.beginPath();
+    for (let i = 0; i < n; i += STEP) {
+        const x = timeToX(i / 100), y = valToY(ayDev[i]);
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.stroke();
 
-    // X axis: frequency
+    // X axis: time labels
     c.fillStyle = '#666';
     c.textAlign = 'center';
-    for (let f = 10; f <= 50; f += 10) {
-        const x = m.left + (f / 50) * pw;
-        c.fillText(f + 'Hz', x, h - 3);
+    c.font = '9px monospace';
+    const step = totalSec <= 10 ? 1 : totalSec <= 30 ? 5 : totalSec <= 120 ? 10 : 30;
+    for (let s = step; s <= totalSec; s += step) {
+        c.fillText(s + 's', timeToX(s), h - 3);
+    }
+
+    // Draw sticky notes
+    drawStickyNotes(c, events, timeToX, valToY, mg, pw, NOTE_H, NOTE_GAP);
+}
+
+function drawStickyNotes(c, events, timeToX, valToY, mg, plotWidth, noteH, noteGap) {
+    if (events.length === 0) return;
+
+    const BUMP_COLOR = '#ef4444';
+    const KICK_COLOR = '#f97316';
+    const NOTE_W = 46;  // Narrower for short classification labels
+
+    // roundRect polyfill
+    function roundRect(ctx, x, y, w, h, r) {
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
+
+    // Assign tiers to avoid overlaps
+    let tier0End = -Infinity, tier1End = -Infinity;
+    const placed = [];
+    for (const ev of events) {
+        const x = timeToX(ev.time);
+        const noteLeft = x - NOTE_W / 2;
+        let tier;
+        if (noteLeft > tier0End + 4) { tier = 0; tier0End = noteLeft + NOTE_W; }
+        else if (noteLeft > tier1End + 4) { tier = 1; tier1End = noteLeft + NOTE_W; }
+        else continue;  // skip — too dense
+        placed.push({ ...ev, tier, screenX: x });
+    }
+
+    for (const p of placed) {
+        const color = p.type === 'bump' ? BUMP_COLOR : KICK_COLOR;
+        const noteY = 2 + p.tier * (noteH + noteGap);
+        const noteX = p.screenX - NOTE_W / 2;
+        const dataY = valToY(p.value);
+
+        // Dashed connector line
+        c.strokeStyle = color + '88';
+        c.lineWidth = 1;
+        c.setLineDash([2, 2]);
+        c.beginPath();
+        c.moveTo(p.screenX, noteY + noteH);
+        c.lineTo(p.screenX, dataY);
+        c.stroke();
+        c.setLineDash([]);
+
+        // Note rectangle
+        c.fillStyle = color;
+        roundRect(c, noteX, noteY, NOTE_W, noteH, 3);
+        c.fill();
+
+        // Small triangle pointer
+        c.beginPath();
+        c.moveTo(p.screenX - 3, noteY + noteH);
+        c.lineTo(p.screenX + 3, noteY + noteH);
+        c.lineTo(p.screenX, noteY + noteH + 3);
+        c.closePath();
+        c.fill();
+
+        // Note text
+        c.fillStyle = '#fff';
+        c.font = '8px monospace';
+        c.textAlign = 'center';
+        c.fillText(p.label, p.screenX, noteY + 10);
     }
 }
 

@@ -4,6 +4,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 
 static AsyncWebServer server(80);
 static AsyncWebSocket ws(WS_PATH);
@@ -256,6 +257,74 @@ static void handleWifiConnectBody(AsyncWebServerRequest *request, uint8_t *data,
     wifiConfigureSTA(ssid, password);
 }
 
+// ===== Truck config API handlers =====
+
+// GET /api/config/truck — current truck geometry from NVS (or defaults)
+static void handleGetTruckConfig(AsyncWebServerRequest *request) {
+    Preferences prefs;
+    uint8_t axles = TRUCK_DEFAULT_AXLES;
+    float axleSp = TRUCK_DEFAULT_AXLE_SP;
+    float truckSp = TRUCK_DEFAULT_TRUCK_SP;
+
+    if (prefs.begin(TRUCK_NVS_NAMESPACE, true)) {
+        axles = prefs.getUChar(TRUCK_NVS_KEY_AXLES, TRUCK_DEFAULT_AXLES);
+        axleSp = prefs.getFloat(TRUCK_NVS_KEY_AXLE_SP, TRUCK_DEFAULT_AXLE_SP);
+        truckSp = prefs.getFloat(TRUCK_NVS_KEY_TRUCK_SP, TRUCK_DEFAULT_TRUCK_SP);
+        prefs.end();
+    }
+
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"axles\":%u,\"axle_spacing_mm\":%.1f,\"truck_spacing_mm\":%.1f}",
+             axles, axleSp, truckSp);
+    request->send(200, "application/json", json);
+}
+
+// POST /api/config/truck — save truck geometry to NVS
+static void handleSetTruckConfig(AsyncWebServerRequest *request) {
+    request->send(400, "text/plain", "Missing body");
+}
+
+static void handleSetTruckConfigBody(AsyncWebServerRequest *request, uint8_t *data,
+                                      size_t len, size_t index, size_t total) {
+    if (index != 0) return;
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, data, len);
+    if (err) {
+        request->send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    uint8_t axles = doc["axles"] | TRUCK_DEFAULT_AXLES;
+    float axleSp = doc["axle_spacing_mm"] | TRUCK_DEFAULT_AXLE_SP;
+    float truckSp = doc["truck_spacing_mm"] | TRUCK_DEFAULT_TRUCK_SP;
+
+    // Validate ranges
+    if (axles < 1 || axles > 4) { request->send(400, "text/plain", "axles: 1-4"); return; }
+    if (axleSp < 1.0f || axleSp > 200.0f) { request->send(400, "text/plain", "axle_spacing: 1-200mm"); return; }
+    if (truckSp < 1.0f || truckSp > 200.0f) { request->send(400, "text/plain", "truck_spacing: 1-200mm"); return; }
+
+    Preferences prefs;
+    if (!prefs.begin(TRUCK_NVS_NAMESPACE, false)) {
+        request->send(500, "text/plain", "NVS error");
+        return;
+    }
+    prefs.putUChar(TRUCK_NVS_KEY_AXLES, axles);
+    prefs.putFloat(TRUCK_NVS_KEY_AXLE_SP, axleSp);
+    prefs.putFloat(TRUCK_NVS_KEY_TRUCK_SP, truckSp);
+    prefs.end();
+
+    Serial.printf("[TRUCK] Config saved: %u axles, %.1f mm axle spacing, %.1f mm truck spacing\n",
+                  axles, axleSp, truckSp);
+
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"axles\":%u,\"axle_spacing_mm\":%.1f,\"truck_spacing_mm\":%.1f}",
+             axles, axleSp, truckSp);
+    request->send(200, "application/json", json);
+}
+
 // POST /api/wifi/disconnect — clear credentials and reboot to AP
 static void handleWifiDisconnect(AsyncWebServerRequest *request) {
     request->send(200, "application/json", "{\"status\":\"rebooting\"}");
@@ -286,6 +355,10 @@ void webServerInit() {
     server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
     server.on("/api/wifi/connect", HTTP_POST, handleWifiConnect, NULL, handleWifiConnectBody);
     server.on("/api/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
+
+    // Truck config API routes
+    server.on("/api/config/truck", HTTP_GET, handleGetTruckConfig);
+    server.on("/api/config/truck", HTTP_POST, handleSetTruckConfig, NULL, handleSetTruckConfigBody);
 
     // Captive portal: catch-all for unknown hosts
     server.onNotFound(handleCaptivePortal);
