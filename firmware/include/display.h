@@ -3,6 +3,14 @@
 
 #include "config.h"
 
+// Set shared I2C mutex for thread-safe OLED access (dual-core mode).
+// Pass nullptr or don't call for single-core operation.
+void displaySetI2CMutex(void *mutex);
+
+// Set shared ring buffer spinlock for thread-safe sparkline reads.
+// Pass nullptr or don't call for single-core operation.
+void displaySetRingSpinlock(void *spinlock);
+
 // Initialize the OLED display. Returns true on success.
 bool displayInit();
 

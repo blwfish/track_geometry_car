@@ -3,11 +3,10 @@
 #include "ring_buffer.h"
 #include <math.h>
 
-bool summaryCompute(summary_1s_t *summary, uint32_t totalSamples, float sampleRate) {
-    uint32_t available = ringBufferCount();
-    if (available < 10) return false;
-
-    uint32_t n = (available < 100) ? available : 100;
+// Internal: compute summary from an array of samples (most-recent-first order).
+static bool computeFromSamples(summary_1s_t *summary, const imu_sample_t *samples,
+                               uint32_t n, uint32_t totalSamples, float sampleRate) {
+    if (n < 10) return false;
 
     // Accumulators — single pass, IMU #1
     float ax_sum2 = 0, ay_sum2 = 0, az_sum2 = 0;
@@ -23,8 +22,7 @@ bool summaryCompute(summary_1s_t *summary, uint32_t totalSamples, float sampleRa
     float ax2_peak = 0, ay2_peak = 0, az2_peak = 0;
 
     for (uint32_t i = 0; i < n; i++) {
-        const imu_sample_t *s = ringBufferGetRecent(i);
-        if (!s) continue;
+        const imu_sample_t *s = &samples[i];
 
         // IMU #1
         float ax = imuAccelG(s->accel_x);
@@ -118,4 +116,23 @@ bool summaryCompute(summary_1s_t *summary, uint32_t totalSamples, float sampleRa
     summary->gyro_z2_mean = gz2_sum / fn;
 
     return true;
+}
+
+bool summaryCompute(summary_1s_t *summary, uint32_t totalSamples, float sampleRate) {
+    uint32_t available = ringBufferCount();
+    if (available < 10) return false;
+
+    uint32_t n = (available < 100) ? available : 100;
+
+    // Copy samples from ring buffer into local array
+    imu_sample_t localBuf[100];
+    uint32_t copied = ringBufferCopyRecent(localBuf, n);
+    if (copied < 10) return false;
+
+    return computeFromSamples(summary, localBuf, copied, totalSamples, sampleRate);
+}
+
+bool summaryComputeFromArray(summary_1s_t *summary, const imu_sample_t *samples,
+                             uint32_t sampleCount, uint32_t totalSamples, float sampleRate) {
+    return computeFromSamples(summary, samples, sampleCount, totalSamples, sampleRate);
 }

@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <esp_timer.h>
 #include "config.h"
 #include "imu.h"
 #include "ring_buffer.h"
@@ -10,24 +9,52 @@
 #include "summary.h"
 #include "flash_logger.h"
 
-// ===== Timer counter =====
-// Incremented by hardware timer callback, decremented by main loop.
-// Using a counter instead of a bool ensures we don't miss samples
-// when the main loop is busy (e.g. during OLED I2C writes).
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
+
+#if CONFIG_FREERTOS_UNICORE
+#include <esp_timer.h>
+#endif
+
+// ===== Dual-core synchronization =====
+// I2C mutex: arbitrates bus between IMU task (core 0) and OLED (core 1)
+static SemaphoreHandle_t i2cMutex = NULL;
+
+// Ring buffer spinlock: protects push (core 0) and read (core 1)
+static portMUX_TYPE ringSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+// ===== IMU task handle =====
+#if !CONFIG_FREERTOS_UNICORE
+static TaskHandle_t imuTaskHandle = NULL;
+#else
+// Single-core fallback: timer + counter (original architecture)
+static esp_timer_handle_t imuTimer = nullptr;
 static volatile uint32_t imuSamplesPending = 0;
+static void IRAM_ATTR imuTimerCallback(void *arg) {
+    imuSamplesPending++;
+}
+#endif
 
 // ===== Statistics =====
-static uint32_t totalSamples   = 0;
-static uint32_t droppedSamples = 0;
+static volatile uint32_t totalSamples   = 0;
+static volatile uint32_t droppedSamples = 0;
 
 // Sample rate measurement
 static uint32_t sampleCountAtLastReport = 0;
 static unsigned long lastStatsReport     = 0;
 static float measuredSamplesPerSec       = 0.0f;
 
-// ===== WebSocket sample accumulation =====
-static imu_sample_t wsSampleBatch[WS_SAMPLE_BATCH_SIZE];
-static uint8_t wsSampleCount = 0;
+// ===== WebSocket double-buffer =====
+// IMU task writes to wsWriteBuf[], main loop reads from wsReadBuf[].
+// When wsWriteBuf is full, pointers swap and wsBatchReady signals main loop.
+static imu_sample_t wsBufA[WS_SAMPLE_BATCH_SIZE];
+static imu_sample_t wsBufB[WS_SAMPLE_BATCH_SIZE];
+static imu_sample_t *wsWriteBuf = wsBufA;     // IMU task writes here
+static imu_sample_t *wsReadBuf  = wsBufB;     // Main loop reads from here
+static volatile uint8_t wsReadCount = 0;       // Samples in read buffer
+static volatile bool wsBatchReady = false;     // Signal to main loop
+static uint8_t wsWriteCount = 0;               // Samples in write buffer (task-local)
 
 // ===== Latest summary =====
 static summary_1s_t latestSummary;
@@ -44,13 +71,6 @@ static unsigned long lastSerialOutput  = 0;
 static unsigned long lastWsSend        = 0;
 static unsigned long lastSummary       = 0;
 static unsigned long lastWsCleanup     = 0;
-
-// ===== Hardware timer =====
-static esp_timer_handle_t imuTimer = nullptr;
-
-static void IRAM_ATTR imuTimerCallback(void *arg) {
-    imuSamplesPending++;
-}
 
 // ===== Recording helpers =====
 
@@ -85,8 +105,14 @@ static void handleCalibrateRequest() {
     webServerClearCalibrateRequest();
 
     Serial.println("[CAL] Re-calibrating gyro (WebSocket request)...");
-    // Pause sampling timer during calibration
+
+#if !CONFIG_FREERTOS_UNICORE
+    // Dual-core: suspend IMU task so we can use I2C from this core
+    vTaskSuspend(imuTaskHandle);
+#else
+    // Single-core: stop timer
     esp_timer_stop(imuTimer);
+#endif
 
     displayStatus("Calibrating gyro...", "Keep car stationary");
     if (imuCalibrate(500)) {
@@ -95,8 +121,11 @@ static void handleCalibrateRequest() {
         Serial.println("[CAL] Re-calibration failed");
     }
 
-    // Resume sampling timer
+#if !CONFIG_FREERTOS_UNICORE
+    vTaskResume(imuTaskHandle);
+#else
     esp_timer_start_periodic(imuTimer, IMU_SAMPLE_INTERVAL_US);
+#endif
 }
 
 static void checkFlashFull() {
@@ -108,17 +137,72 @@ static void checkFlashFull() {
     }
 }
 
+// ===== IMU Task (dual-core only) =====
+#if !CONFIG_FREERTOS_UNICORE
+
+static void imuTaskFunc(void *param) {
+    TickType_t lastWake = xTaskGetTickCount();
+
+    for (;;) {
+        // Sleep until next 10ms boundary — more consistent than vTaskDelay()
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(10));
+
+        imu_sample_t sample;
+        bool ok = false;
+
+        // Take I2C mutex (wait for OLED to finish if it's mid-transfer)
+        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(I2C_MUTEX_TIMEOUT_MS))) {
+            ok = imuReadSample(&sample);
+            xSemaphoreGive(i2cMutex);
+        }
+
+        if (ok) {
+            // Push to ring buffer under spinlock
+            taskENTER_CRITICAL(&ringSpinlock);
+            ringBufferPush(&sample);
+            taskEXIT_CRITICAL(&ringSpinlock);
+            totalSamples++;
+
+            // Accumulate into write buffer
+            wsWriteBuf[wsWriteCount++] = sample;
+
+            // When batch is full, swap double-buffers
+            if (wsWriteCount >= WS_SAMPLE_BATCH_SIZE) {
+                imu_sample_t *tmp = wsReadBuf;
+                wsReadBuf = wsWriteBuf;
+                wsReadCount = wsWriteCount;
+                wsWriteBuf = tmp;
+                wsWriteCount = 0;
+                wsBatchReady = true;
+            }
+        } else {
+            droppedSamples++;
+        }
+    }
+}
+
+#endif // !CONFIG_FREERTOS_UNICORE
+
 // ===== Setup =====
 void setup() {
     Serial.begin(115200);
     Serial.printf("\n\n=== Track Geometry Car %s ===\n", FIRMWARE_VERSION);
     Serial.printf("Build: %s\n\n", BUILD_TIME);
 
+#if CONFIG_FREERTOS_UNICORE
+    Serial.println("Running in SINGLE-CORE mode (timer-based sampling)");
+#else
+    Serial.println("Running in DUAL-CORE mode (dedicated IMU task on core 0)");
+#endif
+
     // Initialize I2C bus
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(I2C_CLOCK_HZ);
     Serial.printf("I2C initialized: SDA=%d, SCL=%d, %dHz\n",
                   I2C_SDA_PIN, I2C_SCL_PIN, I2C_CLOCK_HZ);
+
+    // Create synchronization primitives
+    i2cMutex = xSemaphoreCreateMutex();
 
     // Initialize ring buffer
     ringBufferInit();
@@ -169,7 +253,26 @@ void setup() {
         Serial.println("[WARN] WiFi init failed - continuing without WiFi");
     }
 
-    // Start 100Hz sampling timer
+    // Set up thread-safe display access (must be after displayInit, before IMU task)
+    displaySetI2CMutex(i2cMutex);
+    displaySetRingSpinlock(&ringSpinlock);
+
+    // Start IMU sampling
+#if !CONFIG_FREERTOS_UNICORE
+    // Dual-core: dedicated FreeRTOS task on core 0
+    xTaskCreatePinnedToCore(
+        imuTaskFunc,
+        "IMU",
+        IMU_TASK_STACK_SIZE,
+        NULL,
+        IMU_TASK_PRIORITY,
+        &imuTaskHandle,
+        IMU_TASK_CORE
+    );
+    Serial.printf("IMU task started on core %d (priority %d, stack %d)\n",
+                  IMU_TASK_CORE, IMU_TASK_PRIORITY, IMU_TASK_STACK_SIZE);
+#else
+    // Single-core: hardware timer + counter
     const esp_timer_create_args_t timerArgs = {
         .callback = imuTimerCallback,
         .arg = nullptr,
@@ -178,6 +281,8 @@ void setup() {
     };
     ESP_ERROR_CHECK(esp_timer_create(&timerArgs, &imuTimer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(imuTimer, IMU_SAMPLE_INTERVAL_US));
+    Serial.println("IMU timer started (single-core mode, 100Hz)");
+#endif
 
     if (imuGetCount() > 1) {
         Serial.println("\ntimestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c,ax2_g,ay2_g,az2_g,gx2_dps,gy2_dps,gz2_dps");
@@ -208,64 +313,98 @@ void loop() {
         handleCalibrateRequest();
     }
 
-    // --- 100Hz IMU sampling (counter-driven) ---
+#if CONFIG_FREERTOS_UNICORE
+    // --- Single-core: 100Hz IMU sampling (counter-driven) ---
     while (imuSamplesPending > 0) {
         imuSamplesPending--;
 
         imu_sample_t sample;
         if (imuReadSample(&sample)) {
+            taskENTER_CRITICAL(&ringSpinlock);
             ringBufferPush(&sample);
+            taskEXIT_CRITICAL(&ringSpinlock);
             totalSamples++;
 
-            // Accumulate for WebSocket batch
-            if (wsSampleCount < WS_SAMPLE_BATCH_SIZE) {
-                wsSampleBatch[wsSampleCount++] = sample;
+            // Accumulate into write buffer
+            wsWriteBuf[wsWriteCount++] = sample;
+
+            // When batch is full, swap double-buffers
+            if (wsWriteCount >= WS_SAMPLE_BATCH_SIZE) {
+                imu_sample_t *tmp = wsReadBuf;
+                wsReadBuf = wsWriteBuf;
+                wsReadCount = wsWriteCount;
+                wsWriteBuf = tmp;
+                wsWriteCount = 0;
+                wsBatchReady = true;
             }
         } else {
             droppedSamples++;
         }
     }
+#endif
 
-    // --- 10Hz WebSocket sample broadcast + flash logging ---
+    // --- WebSocket sample broadcast + flash logging ---
+    // Dual-core: triggered by double-buffer swap (wsBatchReady)
+    // Single-core: triggered by time interval (same as before)
+#if CONFIG_FREERTOS_UNICORE
     if (now - lastWsSend >= WS_SEND_INTERVAL_MS) {
         lastWsSend = now;
+#endif
 
-        if (wifiReady && webServerClientCount() > 0 && wsSampleCount > 0) {
-            webServerSendSamples(wsSampleBatch, wsSampleCount);
+    if (wsBatchReady) {
+        wsBatchReady = false;
+
+        // Capture batch pointer and count (stable after flag clear)
+        imu_sample_t *batch = wsReadBuf;
+        uint8_t count = wsReadCount;
+
+        if (wifiReady && webServerClientCount() > 0 && count > 0) {
+            webServerSendSamples(batch, count);
         }
 
         // Write same batch to flash if recording
-        if (flashLoggerIsRecording() && wsSampleCount > 0) {
-            flashLoggerWriteSamples(wsSampleBatch, wsSampleCount);
+        if (flashLoggerIsRecording() && count > 0) {
+            flashLoggerWriteSamples(batch, count);
             checkFlashFull();
         }
-
-        wsSampleCount = 0;
     }
+
+#if CONFIG_FREERTOS_UNICORE
+    }
+#endif
 
     // --- 10Hz Serial CSV output ---
     if (now - lastSerialOutput >= SERIAL_OUTPUT_INTERVAL_MS) {
         lastSerialOutput = now;
 
+        imu_sample_t latestCopy;
+        bool haveLatest = false;
+        taskENTER_CRITICAL(&ringSpinlock);
         const imu_sample_t *latest = ringBufferGetRecent(0);
         if (latest) {
+            latestCopy = *latest;
+            haveLatest = true;
+        }
+        taskEXIT_CRITICAL(&ringSpinlock);
+
+        if (haveLatest) {
             Serial.printf("%lu,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.1f",
-                (unsigned long)latest->timestamp_ms,
-                imuAccelG(latest->accel_x),
-                imuAccelG(latest->accel_y),
-                imuAccelG(latest->accel_z),
-                imuGyroDPS(latest->gyro_x),
-                imuGyroDPS(latest->gyro_y),
-                imuGyroDPS(latest->gyro_z),
-                imuTemperatureC(latest->temperature));
+                (unsigned long)latestCopy.timestamp_ms,
+                imuAccelG(latestCopy.accel_x),
+                imuAccelG(latestCopy.accel_y),
+                imuAccelG(latestCopy.accel_z),
+                imuGyroDPS(latestCopy.gyro_x),
+                imuGyroDPS(latestCopy.gyro_y),
+                imuGyroDPS(latestCopy.gyro_z),
+                imuTemperatureC(latestCopy.temperature));
             if (imuGetCount() > 1) {
                 Serial.printf(",%.4f,%.4f,%.4f,%.2f,%.2f,%.2f",
-                    imuAccelG(latest->accel_x2),
-                    imuAccelG(latest->accel_y2),
-                    imuAccelG(latest->accel_z2),
-                    imuGyroDPS(latest->gyro_x2),
-                    imuGyroDPS(latest->gyro_y2),
-                    imuGyroDPS(latest->gyro_z2));
+                    imuAccelG(latestCopy.accel_x2),
+                    imuAccelG(latestCopy.accel_y2),
+                    imuAccelG(latestCopy.accel_z2),
+                    imuGyroDPS(latestCopy.gyro_x2),
+                    imuGyroDPS(latestCopy.gyro_y2),
+                    imuGyroDPS(latestCopy.gyro_z2));
             }
             Serial.println();
         }
@@ -275,7 +414,15 @@ void loop() {
     if (now - lastSummary >= SUMMARY_INTERVAL_MS) {
         lastSummary = now;
 
-        if (summaryCompute(&latestSummary, totalSamples, measuredSamplesPerSec)) {
+        // Copy samples under spinlock, compute outside
+        imu_sample_t summaryBuf[100];
+        uint32_t copied;
+        taskENTER_CRITICAL(&ringSpinlock);
+        copied = ringBufferCopyRecent(summaryBuf, 100);
+        taskEXIT_CRITICAL(&ringSpinlock);
+
+        if (summaryComputeFromArray(&latestSummary, summaryBuf, copied,
+                                     totalSamples, measuredSamplesPerSec)) {
             if (wifiReady && webServerClientCount() > 0) {
                 webServerSendSummary(&latestSummary);
             }
@@ -286,14 +433,24 @@ void loop() {
     if (now - lastOledUpdate >= OLED_UPDATE_INTERVAL_MS) {
         lastOledUpdate = now;
 
+        // Copy latest sample under spinlock
+        imu_sample_t latestCopy;
+        bool haveLatest = false;
+        taskENTER_CRITICAL(&ringSpinlock);
         const imu_sample_t *latest = ringBufferGetRecent(0);
         if (latest) {
+            latestCopy = *latest;
+            haveLatest = true;
+        }
+        taskEXIT_CRITICAL(&ringSpinlock);
+
+        if (haveLatest) {
             uint8_t clients = wifiReady ? wifiClientCount() : 0;
             bool rec = flashLoggerIsRecording();
             uint32_t recElapsed = rec ? (now - recordingStartTime) / 1000 : 0;
             // Pass latest summary for geometry display (curve/straight indicator)
             const summary_1s_t *sumPtr = (latestSummary.sample_count > 0) ? &latestSummary : nullptr;
-            displayUpdate(latest, totalSamples, droppedSamples,
+            displayUpdate(&latestCopy, totalSamples, droppedSamples,
                           measuredSamplesPerSec, clients, rec, recElapsed, sumPtr);
         }
     }

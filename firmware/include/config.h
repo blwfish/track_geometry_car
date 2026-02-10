@@ -82,6 +82,12 @@
 // IMU2: accel(6) + gyro(6) = 12  (no timestamp, no temp)
 #define WS_SAMPLE_WIRE_SIZE     30
 
+// ===== DUAL-CORE IMU TASK (ESP32 only, not C3/single-core) =====
+#define IMU_TASK_STACK_SIZE     4096
+#define IMU_TASK_PRIORITY       5       // Above Arduino loop (1), below WiFi (23)
+#define IMU_TASK_CORE           0
+#define I2C_MUTEX_TIMEOUT_MS    50      // Max wait for I2C bus
+
 // ===== TIMING CONSTANTS =====
 #define IMU_SAMPLE_INTERVAL_US      10000   // 10 ms = 100 Hz
 #define OLED_UPDATE_INTERVAL_MS     200     // 200 ms = 5 Hz

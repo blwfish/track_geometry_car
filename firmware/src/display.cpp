@@ -6,10 +6,37 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 #include <math.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Full-buffer constructor for SSD1306/SSD1315 128x64 I2C OLED.
 // SSD1315 is register-compatible with SSD1306; U8g2 drives it natively.
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+// Shared I2C mutex (set from main.cpp for dual-core mode)
+static SemaphoreHandle_t s_i2cMutex = NULL;
+
+// Shared ring buffer spinlock (set from main.cpp for dual-core mode)
+static portMUX_TYPE *s_ringSpinlock = NULL;
+
+void displaySetI2CMutex(void *mutex) {
+    s_i2cMutex = (SemaphoreHandle_t)mutex;
+}
+
+void displaySetRingSpinlock(void *spinlock) {
+    s_ringSpinlock = (portMUX_TYPE *)spinlock;
+}
+
+// Helper: send framebuffer to OLED, taking I2C mutex if available
+static void safeSendBuffer() {
+    if (s_i2cMutex) {
+        xSemaphoreTake(s_i2cMutex, portMAX_DELAY);
+        u8g2.sendBuffer();
+        xSemaphoreGive(s_i2cMutex);
+    } else {
+        u8g2.sendBuffer();
+    }
+}
 
 // Dual-color OLED layout: yellow band = rows 0-15, blue band = rows 16-63
 static const uint8_t YELLOW_ZONE_HEIGHT = 16;  // Top 16 rows are yellow
@@ -41,7 +68,7 @@ void displayStartup(const char *version) {
     u8g2.drawStr(0, 22, version);
     u8g2.drawStr(0, 32, BUILD_TIME);
     u8g2.drawStr(0, 46, "Initializing...");
-    u8g2.sendBuffer();
+    safeSendBuffer();
 }
 
 void displayError(const char *message) {
@@ -50,7 +77,7 @@ void displayError(const char *message) {
     u8g2.drawStr(0, 12, "ERROR:");
     u8g2.setFont(u8g2_font_5x7_tf);
     u8g2.drawStr(0, 28, message);
-    u8g2.sendBuffer();
+    safeSendBuffer();
 }
 
 void displayWiFiInfo(const char *ssid, const char *ip, const char *mode,
@@ -67,7 +94,7 @@ void displayWiFiInfo(const char *ssid, const char *ip, const char *mode,
     }
     snprintf(line, sizeof(line), "IP: %s", ip);
     u8g2.drawStr(0, 48, line);
-    u8g2.sendBuffer();
+    safeSendBuffer();
 }
 
 void displayStatus(const char *line1, const char *line2) {
@@ -79,7 +106,7 @@ void displayStatus(const char *line1, const char *line2) {
     if (line2) {
         u8g2.drawStr(0, 44, line2);
     }
-    u8g2.sendBuffer();
+    safeSendBuffer();
 }
 
 void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
@@ -170,15 +197,23 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     u8g2.drawHLine(0, SPARKLINE_Y - 2, 128);
 
     // Sparkline: last 128 Z-axis accel samples
-    uint32_t available = ringBufferCount();
-    uint32_t sparkCount = (available < SPARKLINE_WIDTH) ? available : SPARKLINE_WIDTH;
+    // Copy samples under spinlock to avoid contention with IMU task
+    imu_sample_t sparkSamples[SPARKLINE_WIDTH];
+    uint32_t sparkCount;
+    if (s_ringSpinlock) {
+        taskENTER_CRITICAL(s_ringSpinlock);
+        sparkCount = ringBufferCopyRecent(sparkSamples, SPARKLINE_WIDTH);
+        taskEXIT_CRITICAL(s_ringSpinlock);
+    } else {
+        sparkCount = ringBufferCopyRecent(sparkSamples, SPARKLINE_WIDTH);
+    }
 
     if (sparkCount > 1) {
-        // Collect Z-accel values for auto-scaling
+        // Collect Z-accel values for auto-scaling (from local copy)
         float zValues[SPARKLINE_WIDTH];
         for (uint32_t i = 0; i < sparkCount; i++) {
-            const imu_sample_t *s = ringBufferGetRecent(sparkCount - 1 - i);
-            zValues[i] = s ? imuAccelG(s->accel_z) : 0.0f;
+            // sparkSamples[0] is most recent, we want oldest first for left-to-right
+            zValues[i] = imuAccelG(sparkSamples[sparkCount - 1 - i].accel_z);
         }
 
         // Auto-scale with minimum range guard
@@ -194,5 +229,5 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
         }
     }
 
-    u8g2.sendBuffer();
+    safeSendBuffer();
 }
