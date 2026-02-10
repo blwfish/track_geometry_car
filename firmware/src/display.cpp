@@ -198,7 +198,8 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
 
     // Sparkline: last 128 Z-axis accel samples
     // Copy samples under spinlock to avoid contention with IMU task
-    imu_sample_t sparkSamples[SPARKLINE_WIDTH];
+    // Static to avoid 4KB+ stack allocation (loop task only has 8KB)
+    static imu_sample_t sparkSamples[SPARKLINE_WIDTH];
     uint32_t sparkCount;
     if (s_ringSpinlock) {
         taskENTER_CRITICAL(s_ringSpinlock);
@@ -210,7 +211,7 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
 
     if (sparkCount > 1) {
         // Collect Z-accel values for auto-scaling (from local copy)
-        float zValues[SPARKLINE_WIDTH];
+        static float zValues[SPARKLINE_WIDTH];
         for (uint32_t i = 0; i < sparkCount; i++) {
             // sparkSamples[0] is most recent, we want oldest first for left-to-right
             zValues[i] = imuAccelG(sparkSamples[sparkCount - 1 - i].accel_z);

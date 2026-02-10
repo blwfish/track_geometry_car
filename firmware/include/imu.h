@@ -22,13 +22,18 @@ uint8_t imuGetCount();
 // Convenience: true if second IMU is present.
 bool imuHasSecond();
 
-// Calibrate gyro offsets by averaging numSamples stationary readings.
-// Car must be stationary during calibration. Blocks for numSamples * 10ms.
+// Calibrate gyro and accel offsets by averaging numSamples stationary readings.
+// Car must be stationary and level during calibration. Blocks for numSamples * 10ms.
+// Gyro: all axes zeroed. Accel: X/Y zeroed, Z set to 1g (16384 LSB).
 // Returns true on success. Offsets are applied automatically in imuReadSample().
 bool imuCalibrate(uint16_t numSamples = 500);
 
 // Get current gyro calibration offsets (raw int16 units).
 void imuGetCalibration(int16_t *gx, int16_t *gy, int16_t *gz);
+
+// Get current accel calibration offsets (raw int16 units).
+// Z offset is relative to 1g, so a level IMU reading 16500 raw → offset = 116.
+void imuGetAccelCalibration(int16_t *ax, int16_t *ay, int16_t *az);
 
 // Unit conversion helpers
 float imuAccelG(int16_t raw);

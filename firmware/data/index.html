@@ -122,6 +122,7 @@ button {
     color: #fff;
 }
 #btn-cal { background: #1e3a5f; color: #8cb4e0; }
+#btn-analyze { background: #4c1d95; color: #c4b5fd; }
 #cal-msg { font-size: 12px; color: #fbbf24; display: none; }
 button:disabled { opacity: 0.4; cursor: default; }
 #rec-info {
@@ -224,6 +225,22 @@ button:disabled { opacity: 0.4; cursor: default; }
 #wifi-msg { font-size: 12px; color: #fbbf24; padding: 4px 0; display: none; }
 #geom-group { border: 1px solid #1e3a5f; }
 #speed-input:focus { outline: 1px solid #0f3460; }
+#analysis { padding: 8px 12px; display: none; }
+#analysis.show { display: block; }
+#an-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 8px; background: #16213e; border-radius: 4px 4px 0 0;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+#an-header h3 { font-size: 12px; font-weight: normal; color: #aaa; text-transform: uppercase; }
+#an-toggle { color: #666; font-size: 12px; }
+#an-body { background: #121a30; border-radius: 0 0 4px 4px; padding: 8px; display: none; }
+#an-body.open { display: block; }
+.an-chart { width: 100%; height: 140px; margin-bottom: 8px; border-radius: 4px; }
+.an-label { font-size: 11px; color: #888; margin-bottom: 2px; }
+#an-summary { font-size: 12px; color: #aaa; margin-bottom: 8px; line-height: 1.6; }
+#an-summary b { color: #e0e0e0; }
+.an-legend { font-size: 10px; color: #666; margin-bottom: 6px; }
 @media (min-width: 601px) {
     canvas { height: 400px; min-height: 300px; }
     #readouts { grid-template-columns: 1fr 1fr 1fr; }
@@ -299,6 +316,7 @@ button:disabled { opacity: 0.4; cursor: default; }
         <div class="readout-row"><span class="readout-label">State</span><span class="readout-val" id="geom-state">-</span></div>
         <div class="readout-row"><span class="readout-label">Radius</span><span class="readout-val" id="geom-radius">-</span></div>
         <div class="readout-row"><span class="readout-label">Yaw</span><span class="readout-val" id="geom-yaw">-</span></div>
+        <div class="readout-row"><span class="readout-label">Grade</span><span class="readout-val" id="geom-grade">-</span></div>
         <div class="readout-row"><span class="readout-label">SNR</span><span class="readout-val" id="geom-snr">-</span></div>
         <div class="readout-row"><span class="readout-label">Speed</span><span class="readout-val" id="geom-speed">
             <input type="number" id="speed-input" value="10" min="1" max="60" step="1"
@@ -314,9 +332,36 @@ button:disabled { opacity: 0.4; cursor: default; }
     <button id="btn-start" onclick="startRec()">Start Recording</button>
     <button id="btn-stop" style="display:none" onclick="stopRec()">Stop Recording</button>
     <button id="btn-save" style="display:none" onclick="saveRec()">Save Survey</button>
+    <button id="btn-analyze" style="display:none" onclick="analyzeRec()">Analyze</button>
     <button id="btn-cal" onclick="calibrateGyro()">Calibrate</button>
     <span id="rec-info"></span>
     <span id="cal-msg"></span>
+</div>
+
+<div id="analysis">
+    <div id="an-header" onclick="toggleAnalysis()">
+        <h3>Recording Analysis</h3>
+        <span id="an-toggle">&#9660;</span>
+    </div>
+    <div id="an-body">
+        <div id="an-summary"></div>
+        <div class="an-label">Ride Quality (vertical accel RMS)</div>
+        <div class="an-legend">
+            <span style="color:#4ade80">&#9608; Smooth</span> &nbsp;
+            <span style="color:#fbbf24">&#9608; Fair</span> &nbsp;
+            <span style="color:#ef4444">&#9608; Rough</span>
+        </div>
+        <canvas class="an-chart" id="an-ride"></canvas>
+        <div class="an-label">Curvature (yaw rate, 1s windows)</div>
+        <div class="an-legend">
+            <span style="color:#60a5fa">&#9608; Left</span> &nbsp;
+            <span style="color:#f97316">&#9608; Right</span> &nbsp;
+            <span style="color:#4ade80">&#9608; Straight</span>
+        </div>
+        <canvas class="an-chart" id="an-curve"></canvas>
+        <div class="an-label">Spectrum (Z-accel FFT, 0-50Hz)</div>
+        <canvas class="an-chart" id="an-spectrum"></canvas>
+    </div>
 </div>
 
 <div id="file-manager">
@@ -496,6 +541,8 @@ function parseSummary(v) {
     const ax2Pk = f(), ay2Pk = f(), az2Pk = f();
     const gx2Rms = f(), gy2Rms = f(), gz2Rms = f();
     const gx2Mean = f(), gy2Mean = f(), gz2Mean = f();
+    // Accel means (appended fields for grade computation)
+    const axMean = f(), ayMean = f(), azMean = f();
 
     document.getElementById('ax-rms').textContent = axRms.toFixed(4);
     document.getElementById('ay-rms').textContent = ayRms.toFixed(4);
@@ -523,11 +570,11 @@ function parseSummary(v) {
         document.getElementById('gz2-val').textContent = gz2Rms.toFixed(2);
     }
 
-    // Geometry computation from 1-second mean yaw rate
-    updateGeometry(gzMean, azRms);
+    // Geometry computation from 1-second mean yaw rate and accel means
+    updateGeometry(gzMean, azRms, axMean, ayMean, azMean);
 }
 
-function updateGeometry(yawMeanDps, azRms) {
+function updateGeometry(yawMeanDps, azRms, axMean, ayMean, azMean) {
     const absYaw = Math.abs(yawMeanDps);
     const snr = absYaw / GYRO_NOISE_DPS;
     const speedMph = parseFloat(document.getElementById('speed-input').value) || 10;
@@ -538,9 +585,26 @@ function updateGeometry(yawMeanDps, azRms) {
     const radiusEl = document.getElementById('geom-radius');
     const yawEl = document.getElementById('geom-yaw');
     const snrEl = document.getElementById('geom-snr');
+    const gradeEl = document.getElementById('geom-grade');
 
     yawEl.textContent = absYaw.toFixed(2) + ' \u00b0/s';
     snrEl.textContent = snr.toFixed(0);
+
+    // Grade from longitudinal tilt: atan2(ax, az) gives pitch angle
+    // On level track ax≈0, az≈1g. Positive ax = uphill (nose up).
+    // Grade % = tan(pitch) * 100 = (ax/az) * 100
+    if (axMean !== undefined && azMean !== undefined && azMean !== 0) {
+        const gradePct = (axMean / azMean) * 100;
+        const absGrade = Math.abs(gradePct);
+        if (absGrade < 0.1) {
+            gradeEl.textContent = 'Level';
+            gradeEl.style.color = '#4ade80';
+        } else {
+            const dir = gradePct > 0 ? '\u2191' : '\u2193';  // ↑ uphill, ↓ downhill
+            gradeEl.textContent = dir + ' ' + absGrade.toFixed(1) + '%';
+            gradeEl.style.color = absGrade > 2 ? '#fbbf24' : '#e0e0e0';
+        }
+    }
 
     if (absYaw < CURVE_THRESHOLD_DPS) {
         // Straight track
@@ -603,7 +667,14 @@ window.addEventListener('resize', resizeCanvas);
 window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 150));
 resizeCanvas();
 
-function findRange(traces, nPoints) {
+// Smoothed range state — expand instantly, contract slowly to avoid axis flicker
+const smoothRange = {
+    accel: { min: null, max: null },
+    gyro:  { min: null, max: null }
+};
+const RANGE_DECAY = 0.03;  // Per-frame contraction rate (~1s at 60fps)
+
+function findRange(traces, nPoints, group) {
     let yMin = Infinity, yMax = -Infinity;
     for (const t of traces) {
         for (let i = 0; i < nPoints; i++) {
@@ -613,8 +684,24 @@ function findRange(traces, nPoints) {
             if (val > yMax) yMax = val;
         }
     }
-    const range = yMax - yMin || 0.01;
-    return { min: yMin - range * 0.1, max: yMax + range * 0.1 };
+    const rawRange = yMax - yMin || 0.01;
+    const padded = { min: yMin - rawRange * 0.1, max: yMax + rawRange * 0.1 };
+
+    // Apply smoothing: expand instantly, contract slowly
+    const sr = smoothRange[group];
+    if (sr.min === null) {
+        sr.min = padded.min;
+        sr.max = padded.max;
+    } else {
+        // Expand instantly
+        if (padded.min < sr.min) sr.min = padded.min;
+        if (padded.max > sr.max) sr.max = padded.max;
+        // Contract slowly toward data range
+        sr.min += (padded.min - sr.min) * RANGE_DECAY;
+        sr.max += (padded.max - sr.max) * RANGE_DECAY;
+    }
+
+    return { min: sr.min, max: sr.max };
 }
 
 function drawChart() {
@@ -653,9 +740,9 @@ function drawChart() {
     const nPoints = Math.min(dataCount, Math.ceil(plotW));
     const gridLines = 5;
 
-    // Compute independent ranges
-    const accelRange = hasAccel ? findRange(activeAccel, nPoints) : null;
-    const gyroRange = hasGyro ? findRange(activeGyro, nPoints) : null;
+    // Compute independent ranges (with smoothing to prevent axis flicker)
+    const accelRange = hasAccel ? findRange(activeAccel, nPoints, 'accel') : null;
+    const gyroRange = hasGyro ? findRange(activeGyro, nPoints, 'gyro') : null;
 
     // Draw grid
     ctx.strokeStyle = '#1a2a4a';
@@ -754,6 +841,9 @@ TRACES.forEach((t, i) => {
     el.onclick = () => {
         t.on = !t.on;
         el.className = 'trace-toggle' + (t.on ? '' : ' off') + (t.imu2 ? ' imu2' : '');
+        // Reset range smoothing for this group so scale adapts immediately
+        smoothRange[t.group].min = null;
+        smoothRange[t.group].max = null;
     };
     tcDiv.appendChild(el);
 });
@@ -766,6 +856,8 @@ function startRec() {
     document.getElementById('btn-start').style.display = 'none';
     document.getElementById('btn-stop').style.display = 'inline-block';
     document.getElementById('btn-save').style.display = 'none';
+    document.getElementById('btn-analyze').style.display = 'none';
+    document.getElementById('analysis').className = '';
     document.getElementById('rec-status').innerHTML =
         '<span class="status-dot dot-rec"></span><span id="rec-time">0:00</span>';
 
@@ -786,6 +878,7 @@ function stopRec() {
     document.getElementById('btn-start').style.display = 'inline-block';
     document.getElementById('btn-stop').style.display = 'none';
     document.getElementById('btn-save').style.display = 'inline-block';
+    document.getElementById('btn-analyze').style.display = 'inline-block';
     document.getElementById('rec-status').innerHTML = '';
 
     // Send stop command to ESP32
@@ -803,10 +896,16 @@ function saveRec() {
     // Browser-side JSON save — works for long recordings that exceed flash capacity.
     // Captive portal webviews don't support Blob URLs, so we use a data URI
     // with octet-stream MIME type which triggers a download/share prompt.
+    const defaultName = 'survey_' + new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+    const name = prompt('Survey name:', defaultName);
+    if (name === null) return;  // user cancelled
+    const filename = (name.trim() || defaultName) + '.json';
+
     const survey = {
         version: dualImuDetected ? 2 : 1,
         imu_count: dualImuDetected ? 2 : 1,
         car: 'GeometryCar',
+        name: name.trim() || defaultName,
         start_time: new Date(recStart).toISOString(),
         duration_sec: (Date.now() - recStart) / 1000,
         sample_rate_hz: 100,
@@ -818,7 +917,7 @@ function saveRec() {
     const dataUri = 'data:application/octet-stream;charset=utf-8,' + encodeURIComponent(json);
     const a = document.createElement('a');
     a.href = dataUri;
-    a.download = 'survey_' + new Date().toISOString().replace(/[:.]/g, '') + '.json';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1082,6 +1181,310 @@ function calibrateGyro() {
         msg.textContent = 'Calibration complete';
         setTimeout(() => { msg.style.display = 'none'; }, 3000);
     }, 6000);
+}
+
+// ===== Recording Analysis =====
+let anOpen = false;
+
+function toggleAnalysis() {
+    anOpen = !anOpen;
+    document.getElementById('an-body').className = anOpen ? 'open' : '';
+    document.getElementById('an-toggle').innerHTML = anOpen ? '&#9650;' : '&#9660;';
+}
+
+function analyzeRec() {
+    if (recSamples.length < 100) {
+        alert('Need at least 1 second of data to analyze.');
+        return;
+    }
+    document.getElementById('analysis').className = 'show';
+    anOpen = true;
+    document.getElementById('an-body').className = 'open';
+    document.getElementById('an-toggle').innerHTML = '&#9650;';
+
+    const n = recSamples.length;
+    const dur = n / 100;
+    const winSize = 100;  // 1-second windows
+    const nWin = Math.floor(n / winSize);
+
+    // Compute 1-second windowed statistics
+    const windows = [];
+    for (let w = 0; w < nWin; w++) {
+        let azSum2 = 0, gzSum = 0;
+        for (let i = 0; i < winSize; i++) {
+            const s = recSamples[w * winSize + i];
+            azSum2 += s.az * s.az;
+            gzSum += s.gz;
+        }
+        const azRms = Math.sqrt(azSum2 / winSize);
+        const gzMean = gzSum / winSize;
+        windows.push({ azRms, gzMean, t: (w + 0.5) * winSize / 100 });
+    }
+
+    // Summary statistics
+    let smoothSec = 0, fairSec = 0, roughSec = 0;
+    let curveSec = 0, straightSec = 0;
+    windows.forEach(w => {
+        if (w.azRms < 1.01) smoothSec++;
+        else if (w.azRms < 1.03) fairSec++;
+        else roughSec++;
+        if (Math.abs(w.gzMean) >= 0.3) curveSec++;
+        else straightSec++;
+    });
+    const sumEl = document.getElementById('an-summary');
+    sumEl.innerHTML =
+        '<b>' + n.toLocaleString() + '</b> samples, <b>' + dur.toFixed(1) + 's</b> duration<br>' +
+        'Ride: <b style="color:#4ade80">' + smoothSec + 's smooth</b>, ' +
+        '<b style="color:#fbbf24">' + fairSec + 's fair</b>, ' +
+        '<b style="color:#ef4444">' + roughSec + 's rough</b><br>' +
+        'Track: <b>' + straightSec + 's</b> straight, <b>' + curveSec + 's</b> in curves';
+
+    // --- Ride Quality Chart ---
+    drawBarChart('an-ride', windows, w => w.azRms, w => {
+        if (w.azRms < 1.01) return '#4ade80';
+        if (w.azRms < 1.03) return '#fbbf24';
+        return '#ef4444';
+    }, 'g');
+
+    // --- Curvature Chart ---
+    drawLineChart('an-curve', windows, w => w.gzMean, w => {
+        if (Math.abs(w.gzMean) < 0.3) return '#4ade80';
+        return w.gzMean > 0 ? '#60a5fa' : '#f97316';
+    }, '\u00b0/s');
+
+    // --- Spectrum (FFT) ---
+    drawSpectrum('an-spectrum', recSamples);
+}
+
+function drawBarChart(canvasId, data, valFn, colorFn, unit) {
+    const canvas = document.getElementById(canvasId);
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const c = canvas.getContext('2d');
+    c.scale(dpr, dpr);
+    const w = rect.width, h = rect.height;
+    const m = { top: 5, right: 8, bottom: 18, left: 40 };
+    const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
+
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#0a0f1e';
+    c.fillRect(m.left, m.top, pw, ph);
+
+    if (data.length === 0) return;
+
+    // Auto-scale Y
+    let yMin = Infinity, yMax = -Infinity;
+    data.forEach(d => { const v = valFn(d); if (v < yMin) yMin = v; if (v > yMax) yMax = v; });
+    const yRange = yMax - yMin || 0.01;
+    yMin -= yRange * 0.05;
+    yMax += yRange * 0.05;
+    const yR = yMax - yMin;
+
+    // Y axis labels
+    c.fillStyle = '#666';
+    c.font = '9px monospace';
+    c.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+        const val = yMax - (yR * i / 4);
+        const y = m.top + (ph * i / 4);
+        c.fillText(val.toFixed(3), m.left - 3, y + 3);
+    }
+
+    // Draw bars
+    const barW = Math.max(1, pw / data.length);
+    data.forEach((d, i) => {
+        const v = valFn(d);
+        const barH = ((v - yMin) / yR) * ph;
+        const x = m.left + (i / data.length) * pw;
+        c.fillStyle = colorFn(d);
+        c.fillRect(x, m.top + ph - barH, barW + 0.5, barH);
+    });
+
+    // X axis: time
+    c.fillStyle = '#666';
+    c.textAlign = 'center';
+    c.font = '9px monospace';
+    const totalSec = data.length;
+    const step = totalSec <= 10 ? 1 : totalSec <= 30 ? 5 : totalSec <= 120 ? 10 : 30;
+    for (let s = 0; s <= totalSec; s += step) {
+        if (s === 0) continue;
+        const x = m.left + (s / totalSec) * pw;
+        c.fillText(s + 's', x, h - 3);
+    }
+}
+
+function drawLineChart(canvasId, data, valFn, colorFn, unit) {
+    const canvas = document.getElementById(canvasId);
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const c = canvas.getContext('2d');
+    c.scale(dpr, dpr);
+    const w = rect.width, h = rect.height;
+    const m = { top: 5, right: 8, bottom: 18, left: 40 };
+    const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
+
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#0a0f1e';
+    c.fillRect(m.left, m.top, pw, ph);
+
+    if (data.length === 0) return;
+
+    // Auto-scale Y (symmetric around zero for curvature)
+    let absMax = 0;
+    data.forEach(d => { const v = Math.abs(valFn(d)); if (v > absMax) absMax = v; });
+    absMax = Math.max(absMax * 1.1, 0.5);
+    const yMin = -absMax, yMax = absMax, yR = yMax - yMin;
+
+    // Zero line
+    const zeroY = m.top + ph / 2;
+    c.strokeStyle = '#333';
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(m.left, zeroY);
+    c.lineTo(m.left + pw, zeroY);
+    c.stroke();
+
+    // Y axis labels
+    c.fillStyle = '#666';
+    c.font = '9px monospace';
+    c.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+        const val = yMax - (yR * i / 4);
+        const y = m.top + (ph * i / 4);
+        c.fillText(val.toFixed(1), m.left - 3, y + 3);
+    }
+
+    // Draw filled segments colored by direction
+    const barW = Math.max(1, pw / data.length);
+    data.forEach((d, i) => {
+        const v = valFn(d);
+        const y = m.top + ph - ((v - yMin) / yR) * ph;
+        const x = m.left + (i / data.length) * pw;
+        c.fillStyle = colorFn(d);
+        if (v >= 0) {
+            c.fillRect(x, y, barW + 0.5, zeroY - y);
+        } else {
+            c.fillRect(x, zeroY, barW + 0.5, y - zeroY);
+        }
+    });
+
+    // X axis: time
+    c.fillStyle = '#666';
+    c.textAlign = 'center';
+    c.font = '9px monospace';
+    const totalSec = data.length;
+    const step = totalSec <= 10 ? 1 : totalSec <= 30 ? 5 : totalSec <= 120 ? 10 : 30;
+    for (let s = 0; s <= totalSec; s += step) {
+        if (s === 0) continue;
+        const x = m.left + (s / totalSec) * pw;
+        c.fillText(s + 's', x, h - 3);
+    }
+}
+
+function drawSpectrum(canvasId, samples) {
+    const canvas = document.getElementById(canvasId);
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const c = canvas.getContext('2d');
+    c.scale(dpr, dpr);
+    const w = rect.width, h = rect.height;
+    const m = { top: 5, right: 8, bottom: 18, left: 40 };
+    const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
+
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#0a0f1e';
+    c.fillRect(m.left, m.top, pw, ph);
+
+    // Simple DFT for Z-accel (up to 50Hz = Nyquist for 100Hz sample rate)
+    // Use at most 1024 samples for performance
+    const N = Math.min(samples.length, 1024);
+    const az = new Float32Array(N);
+    // Take the most recent N samples, remove mean
+    let mean = 0;
+    for (let i = 0; i < N; i++) mean += samples[samples.length - N + i].az;
+    mean /= N;
+    for (let i = 0; i < N; i++) az[i] = samples[samples.length - N + i].az - mean;
+
+    // Apply Hann window
+    for (let i = 0; i < N; i++) az[i] *= 0.5 * (1 - Math.cos(2 * Math.PI * i / N));
+
+    // Compute magnitude spectrum (only positive frequencies up to 50Hz)
+    const nBins = Math.floor(N / 2);
+    const mag = new Float32Array(nBins);
+    for (let k = 0; k < nBins; k++) {
+        let re = 0, im = 0;
+        for (let n = 0; n < N; n++) {
+            const angle = -2 * Math.PI * k * n / N;
+            re += az[n] * Math.cos(angle);
+            im += az[n] * Math.sin(angle);
+        }
+        mag[k] = Math.sqrt(re * re + im * im) / N;
+    }
+
+    // Find peak (skip DC bin 0)
+    let peakMag = 0, peakBin = 1;
+    for (let k = 1; k < nBins; k++) {
+        if (mag[k] > peakMag) { peakMag = mag[k]; peakBin = k; }
+    }
+    const peakHz = (peakBin * 100 / N).toFixed(1);
+
+    // Convert to dB (relative to peak)
+    const magDb = new Float32Array(nBins);
+    let dbMin = 0, dbMax = -Infinity;
+    for (let k = 1; k < nBins; k++) {
+        magDb[k] = 20 * Math.log10(Math.max(mag[k], 1e-10) / Math.max(peakMag, 1e-10));
+        if (magDb[k] < dbMin) dbMin = magDb[k];
+        if (magDb[k] > dbMax) dbMax = magDb[k];
+    }
+    dbMin = Math.max(dbMin, -60);  // floor at -60dB
+    const dbRange = dbMax - dbMin || 1;
+
+    // Y axis labels (dB)
+    c.fillStyle = '#666';
+    c.font = '9px monospace';
+    c.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+        const val = dbMax - (dbRange * i / 4);
+        const y = m.top + (ph * i / 4);
+        c.fillText(val.toFixed(0) + 'dB', m.left - 3, y + 3);
+    }
+
+    // Draw spectrum line
+    c.strokeStyle = '#a78bfa';
+    c.lineWidth = 1.5;
+    c.beginPath();
+    let started = false;
+    for (let k = 1; k < nBins; k++) {
+        const freq = k * 100 / N;
+        const x = m.left + (freq / 50) * pw;
+        const db = Math.max(magDb[k], dbMin);
+        const y = m.top + ph - ((db - dbMin) / dbRange) * ph;
+        if (!started) { c.moveTo(x, y); started = true; }
+        else c.lineTo(x, y);
+    }
+    c.stroke();
+
+    // Mark peak frequency
+    const peakX = m.left + (peakBin * 100 / N / 50) * pw;
+    const peakY = m.top;
+    c.fillStyle = '#fbbf24';
+    c.font = '9px monospace';
+    c.textAlign = 'center';
+    c.fillText(peakHz + 'Hz', peakX, peakY + 10);
+
+    // X axis: frequency
+    c.fillStyle = '#666';
+    c.textAlign = 'center';
+    for (let f = 10; f <= 50; f += 10) {
+        const x = m.left + (f / 50) * pw;
+        c.fillText(f + 'Hz', x, h - 3);
+    }
 }
 
 // ===== Init =====

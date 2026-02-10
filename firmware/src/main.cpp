@@ -104,7 +104,7 @@ static void handleCalibrateRequest() {
     if (!webServerGetCalibrateRequest()) return;
     webServerClearCalibrateRequest();
 
-    Serial.println("[CAL] Re-calibrating gyro (WebSocket request)...");
+    Serial.println("[CAL] Re-calibrating IMU (WebSocket request)...");
 
 #if !CONFIG_FREERTOS_UNICORE
     // Dual-core: suspend IMU task so we can use I2C from this core
@@ -114,7 +114,7 @@ static void handleCalibrateRequest() {
     esp_timer_stop(imuTimer);
 #endif
 
-    displayStatus("Calibrating gyro...", "Keep car stationary");
+    displayStatus("Calibrating IMU...", "Keep car stationary & level");
     if (imuCalibrate(500)) {
         Serial.println("[CAL] Re-calibration complete");
     } else {
@@ -223,10 +223,10 @@ void setup() {
         while (true) { delay(1000); }
     }
 
-    // Gyro calibration — car must be stationary for ~5 seconds
-    displayStatus("Calibrating gyro...", "Keep car stationary");
+    // IMU calibration — car must be stationary & level for ~5 seconds
+    displayStatus("Calibrating IMU...", "Keep car stationary & level");
     if (!imuCalibrate(500)) {
-        Serial.println("[WARN] Gyro calibration failed — continuing without offsets");
+        Serial.println("[WARN] IMU calibration failed — continuing without offsets");
     }
 
     // Initialize flash logger (mounts LittleFS — must be before webServerInit)
@@ -415,7 +415,8 @@ void loop() {
         lastSummary = now;
 
         // Copy samples under spinlock, compute outside
-        imu_sample_t summaryBuf[100];
+        // Static to avoid 3.2KB stack allocation (loop task only has 8KB)
+        static imu_sample_t summaryBuf[100];
         uint32_t copied;
         taskENTER_CRITICAL(&ringSpinlock);
         copied = ringBufferCopyRecent(summaryBuf, 100);

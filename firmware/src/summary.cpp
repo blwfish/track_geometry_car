@@ -9,6 +9,7 @@ static bool computeFromSamples(summary_1s_t *summary, const imu_sample_t *sample
     if (n < 10) return false;
 
     // Accumulators — single pass, IMU #1
+    float ax_sum = 0, ay_sum = 0, az_sum = 0;
     float ax_sum2 = 0, ay_sum2 = 0, az_sum2 = 0;
     float gx_sum2 = 0, gy_sum2 = 0, gz_sum2 = 0;
     float gx_sum = 0, gy_sum = 0, gz_sum = 0;
@@ -31,6 +32,10 @@ static bool computeFromSamples(summary_1s_t *summary, const imu_sample_t *sample
         float gx = imuGyroDPS(s->gyro_x);
         float gy = imuGyroDPS(s->gyro_y);
         float gz = imuGyroDPS(s->gyro_z);
+
+        ax_sum += ax;
+        ay_sum += ay;
+        az_sum += az;
 
         ax_sum2 += ax * ax;
         ay_sum2 += ay * ay;
@@ -114,6 +119,11 @@ static bool computeFromSamples(summary_1s_t *summary, const imu_sample_t *sample
     summary->gyro_x2_mean = gx2_sum / fn;
     summary->gyro_y2_mean = gy2_sum / fn;
     summary->gyro_z2_mean = gz2_sum / fn;
+
+    // Accel means (for grade/tilt computation)
+    summary->accel_x_mean = ax_sum / fn;
+    summary->accel_y_mean = ay_sum / fn;
+    summary->accel_z_mean = az_sum / fn;
 
     return true;
 }

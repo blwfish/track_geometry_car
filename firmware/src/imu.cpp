@@ -9,6 +9,11 @@ static uint8_t detectedImuCount = 1;
 static int16_t gyro_offset_x = 0, gyro_offset_y = 0, gyro_offset_z = 0;
 static int16_t gyro_offset_x2 = 0, gyro_offset_y2 = 0, gyro_offset_z2 = 0;
 
+// ===== Accel calibration offsets (raw int16 units) =====
+// X/Y expect 0 at rest; Z expects +16384 (1g at ±2g range)
+static int16_t accel_offset_x = 0, accel_offset_y = 0, accel_offset_z = 0;
+static int16_t accel_offset_x2 = 0, accel_offset_y2 = 0, accel_offset_z2 = 0;
+
 // ===== Low-level I2C helpers =====
 
 static void imuWriteReg(uint8_t addr, uint8_t reg, uint8_t value) {
@@ -116,7 +121,10 @@ bool imuReadSample(imu_sample_t *sample) {
     sample->timestamp_ms = millis();
     sample->temperature = temp;
 
-    // Apply gyro calibration offsets (IMU #1)
+    // Apply calibration offsets (IMU #1)
+    sample->accel_x -= accel_offset_x;
+    sample->accel_y -= accel_offset_y;
+    sample->accel_z -= accel_offset_z;
     sample->gyro_x -= gyro_offset_x;
     sample->gyro_y -= gyro_offset_y;
     sample->gyro_z -= gyro_offset_z;
@@ -129,7 +137,10 @@ bool imuReadSample(imu_sample_t *sample) {
                    &sample->gyro_x2, &sample->gyro_y2, &sample->gyro_z2,
                    &temp2);
 
-        // Apply gyro calibration offsets (IMU #2)
+        // Apply calibration offsets (IMU #2)
+        sample->accel_x2 -= accel_offset_x2;
+        sample->accel_y2 -= accel_offset_y2;
+        sample->accel_z2 -= accel_offset_z2;
         sample->gyro_x2 -= gyro_offset_x2;
         sample->gyro_y2 -= gyro_offset_y2;
         sample->gyro_z2 -= gyro_offset_z2;
@@ -151,12 +162,16 @@ bool imuHasSecond() {
 }
 
 bool imuCalibrate(uint16_t numSamples) {
-    // Temporarily zero offsets so raw reads are uncorrected
+    // Temporarily zero all offsets so raw reads are uncorrected
     gyro_offset_x = gyro_offset_y = gyro_offset_z = 0;
     gyro_offset_x2 = gyro_offset_y2 = gyro_offset_z2 = 0;
+    accel_offset_x = accel_offset_y = accel_offset_z = 0;
+    accel_offset_x2 = accel_offset_y2 = accel_offset_z2 = 0;
 
     int32_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
     int32_t sum_gx2 = 0, sum_gy2 = 0, sum_gz2 = 0;
+    int32_t sum_ax = 0, sum_ay = 0, sum_az = 0;
+    int32_t sum_ax2 = 0, sum_ay2 = 0, sum_az2 = 0;
     uint16_t good = 0;
 
     Serial.printf("[IMU] Calibrating: collecting %u samples...\n", numSamples);
@@ -167,10 +182,16 @@ bool imuCalibrate(uint16_t numSamples) {
             sum_gx += sample.gyro_x;
             sum_gy += sample.gyro_y;
             sum_gz += sample.gyro_z;
+            sum_ax += sample.accel_x;
+            sum_ay += sample.accel_y;
+            sum_az += sample.accel_z;
             if (imu2Present) {
                 sum_gx2 += sample.gyro_x2;
                 sum_gy2 += sample.gyro_y2;
                 sum_gz2 += sample.gyro_z2;
+                sum_ax2 += sample.accel_x2;
+                sum_ay2 += sample.accel_y2;
+                sum_az2 += sample.accel_z2;
             }
             good++;
         }
@@ -182,25 +203,43 @@ bool imuCalibrate(uint16_t numSamples) {
         return false;
     }
 
+    // Gyro offsets: at rest, all axes should read zero
     gyro_offset_x = (int16_t)(sum_gx / good);
     gyro_offset_y = (int16_t)(sum_gy / good);
     gyro_offset_z = (int16_t)(sum_gz / good);
+
+    // Accel offsets: X/Y should read 0, Z should read +16384 (1g at ±2g)
+    accel_offset_x = (int16_t)(sum_ax / good);
+    accel_offset_y = (int16_t)(sum_ay / good);
+    accel_offset_z = (int16_t)(sum_az / good - (int32_t)ACCEL_LSB_PER_G);
+
     if (imu2Present) {
         gyro_offset_x2 = (int16_t)(sum_gx2 / good);
         gyro_offset_y2 = (int16_t)(sum_gy2 / good);
         gyro_offset_z2 = (int16_t)(sum_gz2 / good);
+        accel_offset_x2 = (int16_t)(sum_ax2 / good);
+        accel_offset_y2 = (int16_t)(sum_ay2 / good);
+        accel_offset_z2 = (int16_t)(sum_az2 / good - (int32_t)ACCEL_LSB_PER_G);
     }
 
     Serial.printf("[IMU] Calibration done (%u samples):\n", good);
-    Serial.printf("  IMU1: gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
+    Serial.printf("  IMU1 gyro:  gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
                   gyro_offset_x, gyro_offset_y, gyro_offset_z,
                   imuGyroDPS(gyro_offset_x), imuGyroDPS(gyro_offset_y),
                   imuGyroDPS(gyro_offset_z));
+    Serial.printf("  IMU1 accel: ax=%d ay=%d az=%d (%.4f, %.4f, %.4f g)\n",
+                  accel_offset_x, accel_offset_y, accel_offset_z,
+                  imuAccelG(accel_offset_x), imuAccelG(accel_offset_y),
+                  imuAccelG(accel_offset_z));
     if (imu2Present) {
-        Serial.printf("  IMU2: gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
+        Serial.printf("  IMU2 gyro:  gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
                       gyro_offset_x2, gyro_offset_y2, gyro_offset_z2,
                       imuGyroDPS(gyro_offset_x2), imuGyroDPS(gyro_offset_y2),
                       imuGyroDPS(gyro_offset_z2));
+        Serial.printf("  IMU2 accel: ax=%d ay=%d az=%d (%.4f, %.4f, %.4f g)\n",
+                      accel_offset_x2, accel_offset_y2, accel_offset_z2,
+                      imuAccelG(accel_offset_x2), imuAccelG(accel_offset_y2),
+                      imuAccelG(accel_offset_z2));
     }
 
     return true;
@@ -210,6 +249,12 @@ void imuGetCalibration(int16_t *gx, int16_t *gy, int16_t *gz) {
     *gx = gyro_offset_x;
     *gy = gyro_offset_y;
     *gz = gyro_offset_z;
+}
+
+void imuGetAccelCalibration(int16_t *ax, int16_t *ay, int16_t *az) {
+    *ax = accel_offset_x;
+    *ay = accel_offset_y;
+    *az = accel_offset_z;
 }
 
 float imuAccelG(int16_t raw) {

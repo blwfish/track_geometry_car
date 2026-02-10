@@ -150,6 +150,10 @@ struct summary_1s_t {
     float gyro_x2_mean;
     float gyro_y2_mean;
     float gyro_z2_mean;
+    // Accel means (for grade/tilt computation) — appended to preserve layout
+    float accel_x_mean;      // IMU #1 longitudinal (grade)
+    float accel_y_mean;      // IMU #1 lateral (superelevation)
+    float accel_z_mean;      // IMU #1 vertical (near 1.0g on level)
 };
 
 // ===== FLASH LOGGING =====
