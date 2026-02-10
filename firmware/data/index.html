@@ -1342,9 +1342,10 @@ function analyzeRec() {
         else straightSec++;
     }
 
-    // Count classified event types
+    // Count classified defect locations (deduped, not individual hits)
+    const deduped = events.deduped || [];
     const classMap = {};
-    for (const ev of events) {
+    for (const ev of deduped) {
         const cls = ev.classification || ev.type;
         classMap[cls] = (classMap[cls] || 0) + 1;
     }
@@ -1352,6 +1353,7 @@ function analyzeRec() {
         .map(([cls, cnt]) => '<b>' + cnt + '</b> ' + cls)
         .join(', ');
     if (!eventText) eventText = 'none';
+    eventText += ' <span style="color:#888">(' + events.length + ' hits)</span>';
 
     const sumEl = document.getElementById('an-summary');
     sumEl.innerHTML =
@@ -1616,12 +1618,30 @@ function classifyEvents(events, truckConfig, speedMph) {
         }
 
         // Apply classification label to all events in the group
-        for (const ev of group) {
-            ev.classification = classification;
-            ev.label = classification;
+        // and mark group membership
+        for (let gi = 0; gi < group.length; gi++) {
+            group[gi].classification = classification;
+            group[gi].label = classification;
+            group[gi].groupId = groups.indexOf(group);
         }
     }
 
+    // Build deduped event list: one representative per group
+    // Pick the event with the largest absolute amplitude as the representative
+    const deduped = [];
+    for (const group of groups) {
+        let best = group[0];
+        for (let i = 1; i < group.length; i++) {
+            if (Math.abs(group[i].value) > Math.abs(best.value)) best = group[i];
+        }
+        deduped.push({
+            ...best,
+            groupSize: group.length,
+            label: best.classification + (group.length > 1 ? ' ×' + group.length : '')
+        });
+    }
+
+    events.deduped = deduped;
     return events;
 }
 
@@ -1853,8 +1873,18 @@ function drawTimelineChart(canvasId, samples, azDev, ayDev, events) {
         c.fillText(s + 's', timeToX(s), h - 3);
     }
 
-    // Draw sticky notes
-    drawStickyNotes(c, events, timeToX, valToY, mg, pw, NOTE_H, NOTE_GAP);
+    // Draw small marker dots for all raw event hits (every wheel crossing)
+    const BUMP_DOT = '#ef4444';
+    const KICK_DOT = '#f97316';
+    for (const ev of events) {
+        const x = timeToX(ev.time), y = valToY(ev.value);
+        c.fillStyle = ev.type === 'bump' ? BUMP_DOT : KICK_DOT;
+        c.beginPath(); c.arc(x, y, 2.5, 0, Math.PI * 2); c.fill();
+    }
+
+    // Draw sticky notes for deduped events only (one per defect location)
+    const deduped = events.deduped || events;
+    drawStickyNotes(c, deduped, timeToX, valToY, mg, pw, NOTE_H, NOTE_GAP);
 }
 
 function drawStickyNotes(c, events, timeToX, valToY, mg, plotWidth, noteH, noteGap) {
@@ -1862,7 +1892,7 @@ function drawStickyNotes(c, events, timeToX, valToY, mg, plotWidth, noteH, noteG
 
     const BUMP_COLOR = '#ef4444';
     const KICK_COLOR = '#f97316';
-    const NOTE_W = 46;  // Narrower for short classification labels
+    const NOTE_W = 52;  // Fits "joint? ×2" etc.
 
     // roundRect polyfill
     function roundRect(ctx, x, y, w, h, r) {
