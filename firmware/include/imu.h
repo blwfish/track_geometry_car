@@ -22,6 +22,14 @@ uint8_t imuGetCount();
 // Convenience: true if second IMU is present.
 bool imuHasSecond();
 
+// Calibrate gyro offsets by averaging numSamples stationary readings.
+// Car must be stationary during calibration. Blocks for numSamples * 10ms.
+// Returns true on success. Offsets are applied automatically in imuReadSample().
+bool imuCalibrate(uint16_t numSamples = 500);
+
+// Get current gyro calibration offsets (raw int16 units).
+void imuGetCalibration(int16_t *gx, int16_t *gy, int16_t *gz);
+
 // Unit conversion helpers
 float imuAccelG(int16_t raw);
 float imuGyroDPS(int16_t raw);

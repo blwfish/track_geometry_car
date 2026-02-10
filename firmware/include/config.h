@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // ===== VERSION INFORMATION =====
-#define FIRMWARE_VERSION_BASE "0.4.0"
+#define FIRMWARE_VERSION_BASE "0.5.0"
 
 #ifndef BUILD_GIT_HASH
 #define BUILD_GIT_HASH "dev"
@@ -55,6 +55,10 @@
 #define WIFI_AP_SSID        "GeometryCar"
 #define WIFI_AP_CHANNEL     1
 #define WIFI_AP_MAX_CONN    4
+#define WIFI_STA_CONNECT_TIMEOUT_MS  10000   // 10s to connect in STA mode
+#define WIFI_NVS_NAMESPACE  "wifi"
+#define WIFI_NVS_KEY_SSID   "ssid"
+#define WIFI_NVS_KEY_PASS   "pass"
 
 // ===== WEBSOCKET CONFIGURATION =====
 #define WS_PATH             "/ws"

@@ -12,8 +12,14 @@ void displayStartup(const char *version);
 // Show an error message (large font, centered). Blocks display until next call.
 void displayError(const char *message);
 
-// Show WiFi AP info screen. Call during setup after WiFi init.
-void displayWiFiInfo(const char *ssid, const char *ip);
+// Show WiFi info screen. Call during setup after WiFi init.
+// mode: "AP" or "STA"; extra: "(open - no password)" or RSSI string
+void displayWiFiInfo(const char *ssid, const char *ip, const char *mode = "AP",
+                     const char *extra = "(open - no password)");
+
+// Show a status message centered on the display.
+// Used for "Joining <network>..." or "Calibrating gyro..." etc.
+void displayStatus(const char *line1, const char *line2 = nullptr);
 
 // Update the live display with current IMU data and stats.
 // Called at OLED_UPDATE_INTERVAL_MS rate from main loop.

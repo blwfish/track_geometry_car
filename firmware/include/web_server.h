@@ -32,4 +32,8 @@ void webServerCleanup();
 int8_t webServerGetRecordingRequest();
 void webServerClearRecordingRequest();
 
+// Calibration request flag: set by WS_CMD_CALIBRATE, polled by main loop.
+bool webServerGetCalibrateRequest();
+void webServerClearCalibrateRequest();
+
 #endif // WEB_SERVER_H

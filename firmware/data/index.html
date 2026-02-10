@@ -121,6 +121,8 @@ button {
     background: #1e40af;
     color: #fff;
 }
+#btn-cal { background: #1e3a5f; color: #8cb4e0; }
+#cal-msg { font-size: 12px; color: #fbbf24; display: none; }
 button:disabled { opacity: 0.4; cursor: default; }
 #rec-info {
     font-size: 12px;
@@ -191,6 +193,35 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .btn-dl { background: #1e3a5f; color: #8cb4e0; }
 .btn-del { background: #3f1515; color: #e08c8c; }
+#wifi-manager { padding: 8px 12px; }
+#wm-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 8px; background: #16213e; border-radius: 4px 4px 0 0;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+#wm-header h3 { font-size: 12px; font-weight: normal; color: #aaa; text-transform: uppercase; }
+#wm-toggle { color: #666; font-size: 12px; }
+#wm-body { background: #121a30; border-radius: 0 0 4px 4px; padding: 6px 8px; display: none; }
+#wm-body.open { display: block; }
+#wifi-status { font-size: 12px; color: #aaa; margin-bottom: 8px; }
+.wifi-net {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 4px; border-top: 1px solid #1a2a4a; font-size: 12px; cursor: pointer;
+}
+.wifi-net:first-child { border-top: none; }
+.wifi-net:active { background: #1a2a4a; }
+.wifi-ssid { color: #e0e0e0; }
+.wifi-meta { color: #666; font-size: 11px; }
+#wifi-pass-row { display: none; padding: 8px 0; gap: 6px; align-items: center; }
+#wifi-pass-row.show { display: flex; }
+#wifi-pass-input {
+    flex: 1; background: #0f0f23; color: #e0e0e0; border: 1px solid #333;
+    border-radius: 4px; font-family: inherit; font-size: 13px; padding: 6px 8px;
+}
+.btn-scan { background: #1e3a5f; color: #8cb4e0; padding: 6px 12px; font-size: 12px; }
+.btn-connect { background: #166534; color: #fff; padding: 6px 12px; font-size: 12px; }
+.btn-forget { background: #991b1b; color: #fff; padding: 6px 12px; font-size: 12px; margin-top: 6px; }
+#wifi-msg { font-size: 12px; color: #fbbf24; padding: 4px 0; display: none; }
 #geom-group { border: 1px solid #1e3a5f; }
 #speed-input:focus { outline: 1px solid #0f3460; }
 @media (min-width: 601px) {
@@ -283,7 +314,9 @@ button:disabled { opacity: 0.4; cursor: default; }
     <button id="btn-start" onclick="startRec()">Start Recording</button>
     <button id="btn-stop" style="display:none" onclick="stopRec()">Stop Recording</button>
     <button id="btn-save" style="display:none" onclick="saveRec()">Save Survey</button>
+    <button id="btn-cal" onclick="calibrateGyro()">Calibrate</button>
     <span id="rec-info"></span>
+    <span id="cal-msg"></span>
 </div>
 
 <div id="file-manager">
@@ -295,6 +328,24 @@ button:disabled { opacity: 0.4; cursor: default; }
         <div id="flash-bar"><div id="flash-fill" style="width:0%"></div></div>
         <div id="flash-info">Flash: --</div>
         <div id="survey-list"></div>
+    </div>
+</div>
+
+<div id="wifi-manager">
+    <div id="wm-header" onclick="toggleWifiManager()">
+        <h3>WiFi Settings</h3>
+        <span id="wm-toggle">&#9660;</span>
+    </div>
+    <div id="wm-body">
+        <div id="wifi-status">Loading...</div>
+        <button class="btn-scan" onclick="wifiScan()">Scan Networks</button>
+        <div id="wifi-networks"></div>
+        <div id="wifi-pass-row">
+            <input type="password" id="wifi-pass-input" placeholder="Password">
+            <button class="btn-connect" onclick="wifiConnect()">Connect</button>
+        </div>
+        <div id="wifi-msg"></div>
+        <button class="btn-forget" id="btn-forget" style="display:none" onclick="wifiForget()">Forget Network</button>
     </div>
 </div>
 
@@ -872,6 +923,165 @@ function delSurvey(name) {
             }
         })
         .catch(() => {});
+}
+
+// ===== WiFi Settings =====
+let wmOpen = false;
+let selectedSSID = '';
+
+function toggleWifiManager() {
+    wmOpen = !wmOpen;
+    document.getElementById('wm-body').className = wmOpen ? 'open' : '';
+    document.getElementById('wm-toggle').innerHTML = wmOpen ? '&#9650;' : '&#9660;';
+    if (wmOpen) fetchWifiStatus();
+}
+
+function fetchWifiStatus() {
+    fetch('/api/wifi/status')
+        .then(r => r.json())
+        .then(st => {
+            const el = document.getElementById('wifi-status');
+            const mode = st.mode === 'sta' ? 'Station' : 'Access Point';
+            let html = 'Mode: <b style="color:#60a5fa">' + mode + '</b>';
+            html += ' &middot; SSID: <b style="color:#e0e0e0">' + st.ssid + '</b>';
+            html += ' &middot; IP: ' + st.ip;
+            if (st.mode === 'sta') {
+                html += ' &middot; RSSI: ' + st.rssi + ' dBm';
+            }
+            el.innerHTML = html;
+
+            // Show/hide forget button
+            document.getElementById('btn-forget').style.display =
+                st.mode === 'sta' ? 'inline-block' : 'none';
+        })
+        .catch(() => {
+            document.getElementById('wifi-status').textContent = 'Failed to load WiFi status';
+        });
+}
+
+function wifiScan() {
+    const btn = document.querySelector('.btn-scan');
+    btn.disabled = true;
+    btn.textContent = 'Scanning...';
+    document.getElementById('wifi-networks').innerHTML = '';
+
+    function pollScan() {
+        fetch('/api/wifi/scan')
+            .then(r => r.json())
+            .then(result => {
+                if (result.status === 'scanning') {
+                    setTimeout(pollScan, 1000);
+                    return;
+                }
+                // result is the array of networks
+                btn.disabled = false;
+                btn.textContent = 'Scan Networks';
+                showScanResults(result);
+            })
+            .catch(() => {
+                btn.disabled = false;
+                btn.textContent = 'Scan Networks';
+            });
+    }
+    pollScan();
+}
+
+function rssiToSignal(rssi) {
+    if (rssi >= -50) return '\u2588\u2587\u2586\u2585';
+    if (rssi >= -60) return '\u2588\u2587\u2586\u2581';
+    if (rssi >= -70) return '\u2588\u2587\u2581\u2581';
+    return '\u2588\u2581\u2581\u2581';
+}
+
+function showScanResults(networks) {
+    const el = document.getElementById('wifi-networks');
+    if (!networks || networks.length === 0) {
+        el.innerHTML = '<div style="color:#555;font-size:11px;padding:4px 0">No networks found</div>';
+        return;
+    }
+    // Sort by signal strength
+    networks.sort((a, b) => b.rssi - a.rssi);
+    el.innerHTML = '';
+    networks.forEach(n => {
+        const div = document.createElement('div');
+        div.className = 'wifi-net';
+        const lock = n.open ? '' : '\uD83D\uDD12';
+        div.innerHTML = '<span class="wifi-ssid">' + lock + ' ' + n.ssid + '</span>' +
+            '<span class="wifi-meta">' + rssiToSignal(n.rssi) + ' ' + n.rssi + 'dB</span>';
+        div.onclick = () => selectNetwork(n.ssid, n.open);
+        el.appendChild(div);
+    });
+}
+
+function selectNetwork(ssid, isOpen) {
+    selectedSSID = ssid;
+    const passRow = document.getElementById('wifi-pass-row');
+    if (isOpen) {
+        passRow.className = '';
+        // Connect immediately for open networks
+        wifiConnect();
+    } else {
+        passRow.className = 'show';
+        document.getElementById('wifi-pass-input').value = '';
+        document.getElementById('wifi-pass-input').focus();
+    }
+}
+
+function showWifiMsg(text) {
+    const el = document.getElementById('wifi-msg');
+    el.textContent = text;
+    el.style.display = 'block';
+}
+
+function wifiConnect() {
+    if (!selectedSSID) return;
+    const password = document.getElementById('wifi-pass-input').value;
+    showWifiMsg('Connecting to ' + selectedSSID + '... Device will reboot.');
+
+    fetch('/api/wifi/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid: selectedSSID, password: password })
+    }).catch(() => {});
+
+    // Device will reboot — show message
+    setTimeout(() => {
+        showWifiMsg('Device is rebooting. Reconnect to your network and navigate to the new IP.');
+    }, 2000);
+}
+
+function wifiForget() {
+    if (!confirm('Forget saved network and reboot into AP mode?')) return;
+    showWifiMsg('Clearing credentials... Device will reboot into AP mode.');
+
+    fetch('/api/wifi/disconnect', { method: 'POST' }).catch(() => {});
+
+    setTimeout(() => {
+        showWifiMsg('Device is rebooting. Connect to "GeometryCar" WiFi network.');
+    }, 2000);
+}
+
+// ===== Gyro Calibration =====
+function calibrateGyro() {
+    if (recording) {
+        alert('Stop recording before calibrating.');
+        return;
+    }
+    const btn = document.getElementById('btn-cal');
+    const msg = document.getElementById('cal-msg');
+    btn.disabled = true;
+    msg.textContent = 'Calibrating... keep car stationary';
+    msg.style.display = 'inline';
+
+    // Send calibrate command (0x12)
+    if (ws && ws.readyState === 1) ws.send(new Uint8Array([0x12]));
+
+    // Calibration takes ~5 seconds (500 samples at 100Hz)
+    setTimeout(() => {
+        btn.disabled = false;
+        msg.textContent = 'Calibration complete';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+    }, 6000);
 }
 
 // ===== Init =====

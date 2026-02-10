@@ -5,6 +5,10 @@
 static bool imu2Present = false;
 static uint8_t detectedImuCount = 1;
 
+// ===== Gyro calibration offsets (raw int16 units) =====
+static int16_t gyro_offset_x = 0, gyro_offset_y = 0, gyro_offset_z = 0;
+static int16_t gyro_offset_x2 = 0, gyro_offset_y2 = 0, gyro_offset_z2 = 0;
+
 // ===== Low-level I2C helpers =====
 
 static void imuWriteReg(uint8_t addr, uint8_t reg, uint8_t value) {
@@ -112,6 +116,11 @@ bool imuReadSample(imu_sample_t *sample) {
     sample->timestamp_ms = millis();
     sample->temperature = temp;
 
+    // Apply gyro calibration offsets (IMU #1)
+    sample->gyro_x -= gyro_offset_x;
+    sample->gyro_y -= gyro_offset_y;
+    sample->gyro_z -= gyro_offset_z;
+
     // Read IMU #2 if present — failure is non-fatal (fields stay zero)
     if (imu2Present) {
         int16_t temp2;  // discarded — both sensors at same ambient temp
@@ -119,6 +128,11 @@ bool imuReadSample(imu_sample_t *sample) {
                    &sample->accel_x2, &sample->accel_y2, &sample->accel_z2,
                    &sample->gyro_x2, &sample->gyro_y2, &sample->gyro_z2,
                    &temp2);
+
+        // Apply gyro calibration offsets (IMU #2)
+        sample->gyro_x2 -= gyro_offset_x2;
+        sample->gyro_y2 -= gyro_offset_y2;
+        sample->gyro_z2 -= gyro_offset_z2;
     }
 
     return true;
@@ -134,6 +148,68 @@ uint8_t imuGetCount() {
 
 bool imuHasSecond() {
     return imu2Present;
+}
+
+bool imuCalibrate(uint16_t numSamples) {
+    // Temporarily zero offsets so raw reads are uncorrected
+    gyro_offset_x = gyro_offset_y = gyro_offset_z = 0;
+    gyro_offset_x2 = gyro_offset_y2 = gyro_offset_z2 = 0;
+
+    int32_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
+    int32_t sum_gx2 = 0, sum_gy2 = 0, sum_gz2 = 0;
+    uint16_t good = 0;
+
+    Serial.printf("[IMU] Calibrating: collecting %u samples...\n", numSamples);
+
+    for (uint16_t i = 0; i < numSamples; i++) {
+        imu_sample_t sample;
+        if (imuReadSample(&sample)) {
+            sum_gx += sample.gyro_x;
+            sum_gy += sample.gyro_y;
+            sum_gz += sample.gyro_z;
+            if (imu2Present) {
+                sum_gx2 += sample.gyro_x2;
+                sum_gy2 += sample.gyro_y2;
+                sum_gz2 += sample.gyro_z2;
+            }
+            good++;
+        }
+        delay(10);  // 100 Hz pace
+    }
+
+    if (good < numSamples / 2) {
+        Serial.println("[IMU] Calibration failed: too many I2C errors");
+        return false;
+    }
+
+    gyro_offset_x = (int16_t)(sum_gx / good);
+    gyro_offset_y = (int16_t)(sum_gy / good);
+    gyro_offset_z = (int16_t)(sum_gz / good);
+    if (imu2Present) {
+        gyro_offset_x2 = (int16_t)(sum_gx2 / good);
+        gyro_offset_y2 = (int16_t)(sum_gy2 / good);
+        gyro_offset_z2 = (int16_t)(sum_gz2 / good);
+    }
+
+    Serial.printf("[IMU] Calibration done (%u samples):\n", good);
+    Serial.printf("  IMU1: gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
+                  gyro_offset_x, gyro_offset_y, gyro_offset_z,
+                  imuGyroDPS(gyro_offset_x), imuGyroDPS(gyro_offset_y),
+                  imuGyroDPS(gyro_offset_z));
+    if (imu2Present) {
+        Serial.printf("  IMU2: gx=%d gy=%d gz=%d (%.2f, %.2f, %.2f dps)\n",
+                      gyro_offset_x2, gyro_offset_y2, gyro_offset_z2,
+                      imuGyroDPS(gyro_offset_x2), imuGyroDPS(gyro_offset_y2),
+                      imuGyroDPS(gyro_offset_z2));
+    }
+
+    return true;
+}
+
+void imuGetCalibration(int16_t *gx, int16_t *gy, int16_t *gz) {
+    *gx = gyro_offset_x;
+    *gy = gyro_offset_y;
+    *gz = gyro_offset_z;
 }
 
 float imuAccelG(int16_t raw) {

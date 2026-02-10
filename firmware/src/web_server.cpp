@@ -1,6 +1,8 @@
 #include "web_server.h"
+#include "wifi_manager.h"
 #include "flash_logger.h"
 #include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
 #include <LittleFS.h>
 
 static AsyncWebServer server(80);
@@ -10,6 +12,7 @@ static AsyncWebSocket ws(WS_PATH);
 // volatile because it's written from the async WebSocket callback context
 // and read from the main loop.
 static volatile int8_t recordingRequest = 0;  // 1=start, -1=stop, 0=none
+static volatile bool calibrateRequest = false;
 
 // ===== WebSocket event handler =====
 
@@ -37,6 +40,7 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                         break;
                     case WS_CMD_CALIBRATE:
                         Serial.println("[WS] Command: Calibrate");
+                        calibrateRequest = true;
                         break;
                     default:
                         Serial.printf("[WS] Unknown command: 0x%02X\n", cmd);
@@ -53,24 +57,33 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
     }
 }
 
-// ===== Captive portal redirect =====
+// ===== Captive portal redirect (AP mode only) =====
+
+static String getRedirectURL() {
+    char ip[16];
+    wifiGetIP(ip, sizeof(ip));
+    return String("http://") + ip + "/";
+}
 
 static void handleCaptivePortal(AsyncWebServerRequest *request) {
+    // In STA mode, no captive portal — just serve the page
+    if (wifiGetMode() == GC_WIFI_STA) {
+        request->send(LittleFS, "/index.html", "text/html");
+        return;
+    }
+
+    char ip[16];
+    wifiGetIP(ip, sizeof(ip));
+
     if (request->host() == "connectivitycheck.gstatic.com" ||
-        request->host() == "clients3.google.com") {
-        request->redirect("http://192.168.4.1/");
+        request->host() == "clients3.google.com" ||
+        request->host() == "captive.apple.com" ||
+        request->host() == "www.msftconnecttest.com") {
+        request->redirect(getRedirectURL());
         return;
     }
-    if (request->host() == "captive.apple.com") {
-        request->redirect("http://192.168.4.1/");
-        return;
-    }
-    if (request->host() == "www.msftconnecttest.com") {
-        request->redirect("http://192.168.4.1/");
-        return;
-    }
-    if (request->host() != "192.168.4.1") {
-        request->redirect("http://192.168.4.1/");
+    if (request->host() != ip) {
+        request->redirect(getRedirectURL());
         return;
     }
     request->send(LittleFS, "/index.html", "text/html");
@@ -174,6 +187,82 @@ static void handleStatus(AsyncWebServerRequest *request) {
     request->send(200, "application/json", json);
 }
 
+// ===== WiFi config API handlers =====
+
+// GET /api/wifi/status — current WiFi state
+static void handleWifiStatus(AsyncWebServerRequest *request) {
+    char ip[16];
+    wifiGetIP(ip, sizeof(ip));
+
+    String json = "{\"mode\":\"";
+    json += (wifiGetMode() == GC_WIFI_STA) ? "sta" : "ap";
+    json += "\",\"ssid\":\"";
+    json += wifiGetSSID();
+    json += "\",\"ip\":\"";
+    json += ip;
+    json += "\",\"rssi\":";
+    json += String(wifiGetRSSI());
+    json += "}";
+    request->send(200, "application/json", json);
+}
+
+// GET /api/wifi/scan — trigger scan and return results
+static void handleWifiScan(AsyncWebServerRequest *request) {
+    if (wifiScanInProgress()) {
+        request->send(202, "application/json", "{\"status\":\"scanning\"}");
+        return;
+    }
+
+    if (wifiScanResultsReady()) {
+        request->send(200, "application/json", wifiGetScanResultsJSON());
+        return;
+    }
+
+    // Start a new scan
+    wifiStartScan();
+    request->send(202, "application/json", "{\"status\":\"scanning\"}");
+}
+
+// POST /api/wifi/connect — save credentials and reboot
+static void handleWifiConnect(AsyncWebServerRequest *request) {
+    // Body handled in onRequestBody
+    request->send(400, "text/plain", "Missing body");
+}
+
+static void handleWifiConnectBody(AsyncWebServerRequest *request, uint8_t *data,
+                                   size_t len, size_t index, size_t total) {
+    if (index != 0) return;  // Only handle first chunk
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, data, len);
+    if (err) {
+        request->send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    const char *ssid = doc["ssid"];
+    const char *password = doc["password"] | "";
+
+    if (!ssid || strlen(ssid) == 0) {
+        request->send(400, "text/plain", "Missing SSID");
+        return;
+    }
+
+    request->send(200, "application/json", "{\"status\":\"rebooting\"}");
+
+    // Delay slightly to let the response send, then save + reboot
+    // wifiConfigureSTA will reboot the ESP32
+    delay(200);
+    wifiConfigureSTA(ssid, password);
+}
+
+// POST /api/wifi/disconnect — clear credentials and reboot to AP
+static void handleWifiDisconnect(AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"status\":\"rebooting\"}");
+    delay(200);
+    wifiClearSTA();
+}
+
 // ===== Public API =====
 
 void webServerInit() {
@@ -188,22 +277,27 @@ void webServerInit() {
 
     // Survey API routes (must be registered BEFORE captive portal catch-all)
     server.on("/api/surveys", HTTP_GET, handleListSurveys);
-    // For /api/survey/*, we use onRequestBody isn't needed — just match the prefix
     server.on("^\\/api\\/survey\\/(.+)$", HTTP_GET, handleDownloadSurvey);
     server.on("^\\/api\\/survey\\/(.+)$", HTTP_DELETE, handleDeleteSurvey);
     server.on("/api/status", HTTP_GET, handleStatus);
+
+    // WiFi config API routes
+    server.on("/api/wifi/status", HTTP_GET, handleWifiStatus);
+    server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
+    server.on("/api/wifi/connect", HTTP_POST, handleWifiConnect, NULL, handleWifiConnectBody);
+    server.on("/api/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
 
     // Captive portal: catch-all for unknown hosts
     server.onNotFound(handleCaptivePortal);
 
     // Android generates a 204 check
     server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("http://192.168.4.1/");
+        request->redirect(getRedirectURL());
     });
 
     // Apple captive portal check
     server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("http://192.168.4.1/");
+        request->redirect(getRedirectURL());
     });
 
     server.begin();
@@ -295,4 +389,12 @@ int8_t webServerGetRecordingRequest() {
 
 void webServerClearRecordingRequest() {
     recordingRequest = 0;
+}
+
+bool webServerGetCalibrateRequest() {
+    return calibrateRequest;
+}
+
+void webServerClearCalibrateRequest() {
+    calibrateRequest = false;
 }

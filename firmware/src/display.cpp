@@ -2,6 +2,7 @@
 #include "geometry.h"
 #include "imu.h"
 #include "ring_buffer.h"
+#include "wifi_manager.h"
 #include <U8g2lib.h>
 #include <Wire.h>
 #include <math.h>
@@ -52,17 +53,32 @@ void displayError(const char *message) {
     u8g2.sendBuffer();
 }
 
-void displayWiFiInfo(const char *ssid, const char *ip) {
+void displayWiFiInfo(const char *ssid, const char *ip, const char *mode,
+                     const char *extra) {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tf);
     u8g2.drawStr(0, 10, "Track Geometry Car");
     u8g2.setFont(u8g2_font_5x7_tf);
     char line[28];
-    snprintf(line, sizeof(line), "WiFi: %s", ssid);
+    snprintf(line, sizeof(line), "%s: %s", mode, ssid);
     u8g2.drawStr(0, 24, line);
-    u8g2.drawStr(0, 34, "(open - no password)");
+    if (extra && extra[0]) {
+        u8g2.drawStr(0, 34, extra);
+    }
     snprintf(line, sizeof(line), "IP: %s", ip);
     u8g2.drawStr(0, 48, line);
+    u8g2.sendBuffer();
+}
+
+void displayStatus(const char *line1, const char *line2) {
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "Track Geometry Car");
+    u8g2.setFont(u8g2_font_5x7_tf);
+    u8g2.drawStr(0, 32, line1);
+    if (line2) {
+        u8g2.drawStr(0, 44, line2);
+    }
     u8g2.sendBuffer();
 }
 
@@ -80,12 +96,23 @@ void displayUpdate(const imu_sample_t *latest, uint32_t totalSamples,
     if (recording) {
         uint32_t m = recElapsedSec / 60;
         uint32_t s = recElapsedSec % 60;
-        snprintf(line, sizeof(line), "REC %lu:%02lu W:%u",
-                 (unsigned long)m, (unsigned long)s, wifiClients);
+        if (wifiGetMode() == GC_WIFI_STA) {
+            snprintf(line, sizeof(line), "REC %lu:%02lu %ddB",
+                     (unsigned long)m, (unsigned long)s, (int)wifiGetRSSI());
+        } else {
+            snprintf(line, sizeof(line), "REC %lu:%02lu W:%u",
+                     (unsigned long)m, (unsigned long)s, wifiClients);
+        }
     } else {
-        snprintf(line, sizeof(line), "%.0fHz %luS W:%u",
-                 samplesPerSec, (unsigned long)totalSamples,
-                 wifiClients);
+        if (wifiGetMode() == GC_WIFI_STA) {
+            snprintf(line, sizeof(line), "%.0fHz %luS %ddB",
+                     samplesPerSec, (unsigned long)totalSamples,
+                     (int)wifiGetRSSI());
+        } else {
+            snprintf(line, sizeof(line), "%.0fHz %luS W:%u",
+                     samplesPerSec, (unsigned long)totalSamples,
+                     wifiClients);
+        }
     }
     u8g2.drawStr(0, 7, line);
 

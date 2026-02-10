@@ -80,6 +80,25 @@ static void handleRecordingRequest() {
     }
 }
 
+static void handleCalibrateRequest() {
+    if (!webServerGetCalibrateRequest()) return;
+    webServerClearCalibrateRequest();
+
+    Serial.println("[CAL] Re-calibrating gyro (WebSocket request)...");
+    // Pause sampling timer during calibration
+    esp_timer_stop(imuTimer);
+
+    displayStatus("Calibrating gyro...", "Keep car stationary");
+    if (imuCalibrate(500)) {
+        Serial.println("[CAL] Re-calibration complete");
+    } else {
+        Serial.println("[CAL] Re-calibration failed");
+    }
+
+    // Resume sampling timer
+    esp_timer_start_periodic(imuTimer, IMU_SAMPLE_INTERVAL_US);
+}
+
 static void checkFlashFull() {
     if (flashLoggerIsRecording() && flashLoggerFlashFull()) {
         Serial.println("[REC] Flash full — auto-stopping");
@@ -120,19 +139,31 @@ void setup() {
         while (true) { delay(1000); }
     }
 
+    // Gyro calibration — car must be stationary for ~5 seconds
+    displayStatus("Calibrating gyro...", "Keep car stationary");
+    if (!imuCalibrate(500)) {
+        Serial.println("[WARN] Gyro calibration failed — continuing without offsets");
+    }
+
     // Initialize flash logger (mounts LittleFS — must be before webServerInit)
     if (!flashLoggerInit()) {
         Serial.println("[WARN] Flash logger init failed - continuing without logging");
     }
 
-    // Initialize WiFi AP
+    // Initialize WiFi (STA with AP fallback)
     if (wifiInit()) {
         wifiReady = true;
         webServerInit();
 
         char ipBuf[16];
         wifiGetIP(ipBuf, sizeof(ipBuf));
-        displayWiFiInfo(WIFI_AP_SSID, ipBuf);
+        if (wifiGetMode() == GC_WIFI_STA) {
+            char extra[28];
+            snprintf(extra, sizeof(extra), "RSSI: %d dBm", (int)wifiGetRSSI());
+            displayWiFiInfo(wifiGetSSID(), ipBuf, "STA", extra);
+        } else {
+            displayWiFiInfo(wifiGetSSID(), ipBuf, "AP", "(open - no password)");
+        }
         delay(2500);
     } else {
         Serial.println("[WARN] WiFi init failed - continuing without WiFi");
@@ -170,6 +201,11 @@ void loop() {
     // --- Check recording requests from WebSocket ---
     if (wifiReady) {
         handleRecordingRequest();
+    }
+
+    // --- Check calibrate requests from WebSocket ---
+    if (wifiReady) {
+        handleCalibrateRequest();
     }
 
     // --- 100Hz IMU sampling (counter-driven) ---
